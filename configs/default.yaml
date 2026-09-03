@@ -1,0 +1,73 @@
+# RetinaPrep configuration
+# Every path and threshold lives here. No magic numbers in the code.
+
+seed: 42
+
+paths:
+  data_root: data/odir5k
+  artifacts: artifacts
+  runs: artifacts/runs
+
+dataset:
+  name: odir5k
+  # Path to the ODIR-5K metadata csv, relative to data_root.
+  # The Kaggle release ships both `full_df.csv` and `data.csv`.
+  metadata_csv: full_df.csv
+  image_dir: preprocessed_images
+  # Cap for a fast run. Set to null to use everything.
+  subsample_n: 2000
+
+label:
+  # Binary task: 0 = normal, 1 = abnormal.
+  # Derivation rule must be documented in the README, not just implied here.
+  # "normal_column" uses the ODIR one-hot N column; "keywords" parses the
+  # diagnostic keyword strings. Start with normal_column.
+  strategy: normal_column
+  normal_column: N
+
+quality:
+  # Transparent weighted score, not a learned one. Weights must sum to 1.0.
+  weights:
+    blur: 0.4
+    exposure: 0.3
+    illumination: 0.3
+  thresholds:
+    laplacian_var_min: 100.0
+    saturated_pixel_frac_max: 0.05
+    near_black_pixel_frac_max: 0.60
+    quadrant_intensity_cv_max: 0.35
+    fov_radius_frac_min: 0.30
+  reject_below_score: 0.5
+
+dedupe:
+  phash_hamming_max: 6
+  embedding_cosine_min: 0.98
+  embedding_model: resnet18
+
+split:
+  test_frac: 0.2
+  val_frac: 0.1
+  stratify_on: label
+  group_on: patient_id
+
+train:
+  model: resnet18
+  pretrained: true
+  image_size: 256
+  crop_size: 224
+  batch_size: 32
+  epochs: 8
+  lr: 0.0003
+  weight_decay: 0.0001
+  num_workers: 4
+  early_stop_patience: 3
+
+experiment:
+  arms: [A, B, C, D]
+  # Force all arms to the same training-set size so curation is not
+  # confounded with dataset size.
+  match_arm_sizes: true
+
+report:
+  output_html: artifacts/qc_report.html
+  n_examples_per_panel: 8
