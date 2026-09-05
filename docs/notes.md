@@ -7,6 +7,34 @@ written from evidence rather than reconstructed from memory.
 
 - [ ] Session 1: scaffold created, ingest + split + A/B experiment.
 
+## First A/B training run (small, CPU, exploratory -- not the headline number)
+
+Ran train.py + experiment.py for the first time: arm A, arm B (seed 42),
+and arm B again (seed 777), CPU only (CUDA install still pending on this
+box), `subsample_n=800`, `epochs=4`, `image_size=224`, `crop_size=192`.
+Timed one epoch first (42.4s) and estimated ~8.5 min total for all three
+runs before committing to the full run -- actual wall time was close to
+that estimate. Full numbers: `artifacts/results_table.md`.
+
+| run | AUROC | AUPRC | Sens@95%Spec |
+|---|---|---|---|
+| A (image_random) | 0.745 | 0.803 | 0.349 |
+| B seed 42 (patient_group) | 0.647 | 0.719 | 0.271 |
+| B seed 777 (patient_group) | 0.701 | 0.759 | 0.294 |
+
+A-vs-B gap (seed 42): 0.098 AUROC. B-vs-B seed spread: 0.054 AUROC. The
+gap is bigger than the seed noise (~1.8x), and in the direction the
+leakage hypothesis predicts (image_random inflated) -- but seed noise is
+still more than half the size of the effect at n=800. Read plainly: this
+run is consistent with the hypothesis, not proof of it at this scale.
+Confusion matrices make the instability concrete too -- the same arm B
+model swung from specificity-favoring (tn=66,fp=9) to sensitivity-favoring
+(tn=36,fp=39) between the two seeds, a bigger behavioral swing than the
+AUROC numbers alone suggest. Do not treat this run's numbers as the
+project's headline result; re-run at full scale (no subsampling, more
+seeds, real CUDA once available) before writing anything into the README's
+headline table.
+
 ## Label strategy default switched: normal_column -> keywords
 
 Investigated whether the patient-level `N` one-hot flag (`normal_column`)

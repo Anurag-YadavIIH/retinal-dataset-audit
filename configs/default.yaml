@@ -63,8 +63,16 @@ train:
   epochs: 8
   lr: 0.0003
   weight_decay: 0.0001
-  num_workers: 4
+  # 0 on Windows: >0 workers need the dataset/transform to be picklable
+  # (spawn start method) and the per-batch IPC overhead rarely pays off at
+  # this dataset size anyway. Raise it on Linux/CI if it's ever worth it.
+  num_workers: 0
   early_stop_patience: 3
+  # cuda -> mps -> cpu, first available; set explicitly (e.g. "cpu") to force one.
+  device: auto
+  # Mixed precision. Only takes effect on cuda; off by default because the
+  # dev box is CPU-only until the CUDA torch build lands.
+  amp: false
 
 experiment:
   arms: [A, B, C, D]
