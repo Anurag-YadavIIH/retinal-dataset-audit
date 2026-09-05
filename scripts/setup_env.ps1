@@ -20,12 +20,13 @@
   Also run the CUDA torch/torchvision install (Step 3). Off by default.
 
 .PARAMETER TorchCudaTag
-  PyTorch's CUDA wheel tag, e.g. "cu130". Verified against
-  https://download.pytorch.org/whl/<tag>/torch/ on 2026-09-05 as the tag
+  PyTorch's CUDA wheel tag. Defaults to "cu126", which is a hardware-specific
+  pin for this project's dev machine (GTX 1050, Pascal, sm_61) -- see the
+  comment block above Step 3 below before raising this. Verified against
+  https://download.pytorch.org/whl/cu126/torch/ on 2026-09-05 as the tag
   carrying torch 2.14.0 for cp313-win_amd64. PyTorch's supported tags change
   over time -- if this 404s, check that page (or
-  https://pytorch.org/get-started/locally/) for the current tag and pass it
-  here, e.g. -TorchCudaTag cu126.
+  https://pytorch.org/get-started/locally/) for the current tag.
 
 .PARAMETER TorchVersion / -TorchvisionVersion
   Must be a matched pair published under the same CUDA tag. Defaults are the
@@ -47,7 +48,7 @@
 #>
 param(
     [switch]$IncludeCudaTorch,
-    [string]$TorchCudaTag = "cu130",
+    [string]$TorchCudaTag = "cu126",
     [string]$TorchVersion = "2.14.0",
     [string]$TorchvisionVersion = "0.29.0"
 )
@@ -130,12 +131,30 @@ if (-not $IncludeCudaTorch) {
 # were verified as a matched, currently-published trio -- re-check them at
 # https://download.pytorch.org/whl/<tag>/torch/ if this has gone stale.
 #
-# This machine's GPU is a GTX 1050 (Pascal, compute capability 6.1 /
-# "sm_61"). PyTorch's default wheels have dropped older compute
-# capabilities before; a wheel installing cleanly proves nothing about
-# whether it actually shipped sm_61 kernels. That is exactly what
-# scripts/doctor.py checks after this step -- always run it once this
-# finishes, and do not assume success just because pip exits 0.
+# WHY cu126 specifically, and not something newer:
+# ---------------------------------------------------------------------
+# This machine's GPU is a GTX 1050 -- Pascal, compute capability 6.1
+# ("sm_61"). Per PyTorch's own build matrix, CUDA 13.0 wheels dropped
+# Maxwell, Pascal AND Volta outright (Turing / sm_75 is the new minimum).
+# Maxwell and Pascal were *already* removed from the CUDA 12.8 and 12.9
+# wheel builds before that. So cu128, cu129 and cu130 are not "newer, so
+# better" here -- they are wheels with no sm_61 kernels at all, and this
+# GPU would fail at first kernel launch regardless of cuda.is_available()
+# reporting True. cu126 is the newest tag that still ships Pascal support.
+#
+# Separately, this machine's driver (576.88) reports a CUDA capability
+# ceiling of 12.9 anyway (see `nvidia-smi`), so cu128/cu129/cu130 would be
+# a driver mismatch even on a GPU new enough to have their kernels.
+#
+# This pin is hardware-specific to THIS machine, not a project-wide
+# constraint -- on a Turing-or-newer GPU (RTX 20-series or later) with a
+# driver supporting it, cu128/cu130 etc. are fine and preferable. Raise
+# $TorchCudaTag accordingly; just don't do it for this box.
+#
+# A wheel installing cleanly still proves nothing about whether it shipped
+# the kernels this GPU needs -- that is exactly what scripts/doctor.py's
+# sm_61 and driver-vs-wheel checks are for. Always run it once this
+# finishes; do not assume success just because pip exits 0.
 Write-Output ""
 Write-Output "=== Step 3: CUDA torch/torchvision ($TorchCudaTag) ==="
 

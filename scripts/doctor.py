@@ -6,11 +6,14 @@ Run as `python -m scripts.doctor` from the repo root, or directly:
 Exits 0 if everything checked out (torch simply being absent is not a
 problem -- only `train` and dedupe's embedding path need it). Exits 1 if a
 real problem was found: a GPU that torch can see but cannot actually
-compute on, most notably a CUDA build that dropped this machine's compute
-capability (Pascal / sm_61) while still reporting cuda.is_available() ==
-True. That combination is a silent failure -- detection succeeding proves
-nothing about kernels actually running -- which is exactly what the matmul
-and get_arch_list checks below exist to catch.
+compute on. Two ways that happens, both checked below:
+  - the installed wheel targets a newer CUDA than the driver supports
+    (compares torch.version.cuda against the ceiling nvidia-smi reports)
+  - the wheel dropped this machine's compute capability (Pascal / sm_61)
+    while still reporting cuda.is_available() == True
+Either is a silent failure -- detection succeeding proves nothing about
+kernels actually running -- which is exactly what the version check, the
+get_arch_list check, and the matmul below exist to catch.
 
 Whether Python resolved outside .venv, and whether the raw dataset has
 landed yet, are reported but do not affect the exit code: both are normal
@@ -21,6 +24,7 @@ interpreter on purpose; not having downloaded ODIR-5K yet).
 from __future__ import annotations
 
 import csv
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -48,6 +52,26 @@ def nvidia_smi_gpu_name() -> str | None:
     if result.returncode != 0 or not result.stdout.strip():
         return None
     return result.stdout.strip().splitlines()[0]
+
+
+def nvidia_smi_max_cuda_version() -> str | None:
+    """The driver's CUDA capability ceiling, e.g. "12.9".
+
+    This is not exposed as a --query-gpu field (it's a value nvidia-smi
+    derives from the driver, not a GPU property), so it has to be scraped
+    from the plain-text header it prints, e.g.
+    "...Driver Version: 576.88         CUDA Version: 12.9...".
+    """
+    try:
+        result = subprocess.run(
+            ["nvidia-smi"], capture_output=True, text=True, timeout=10
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    match = re.search(r"CUDA Version:\s*([\d.]+)", result.stdout)
+    return match.group(1) if match else None
 
 
 def check_python() -> None:
@@ -81,6 +105,26 @@ def check_torch() -> None:
     else:
         build_kind = "unknown (no +cpu/+cuXXX suffix)"
     print(f"  version: {version}  (build: {build_kind})")
+
+    driver_max_cuda = nvidia_smi_max_cuda_version()
+    wheel_cuda = torch.version.cuda  # e.g. "12.6"; None for a +cpu build
+    if driver_max_cuda:
+        print(f"  driver's max supported CUDA (nvidia-smi): {driver_max_cuda}")
+    if wheel_cuda and driver_max_cuda:
+        try:
+            wheel_v = tuple(int(p) for p in wheel_cuda.split(".")[:2])
+            driver_v = tuple(int(p) for p in driver_max_cuda.split(".")[:2])
+        except ValueError:
+            wheel_v = driver_v = None  # unparsable version string; don't guess
+        if wheel_v is not None and wheel_v > driver_v:
+            problems.append(
+                f"torch was built for CUDA {wheel_cuda} but the installed driver only "
+                f"supports up to CUDA {driver_max_cuda} (per nvidia-smi). "
+                "cuda.is_available() can still report True here while every real kernel "
+                "launch fails -- this is the mismatch scripts/setup_env.ps1's "
+                "-TorchCudaTag pin exists to avoid; reinstall a build matching the "
+                "driver's ceiling."
+            )
 
     gpu_name_smi = nvidia_smi_gpu_name()
     cuda_available = torch.cuda.is_available()
