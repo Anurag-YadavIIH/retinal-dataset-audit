@@ -7,6 +7,145 @@ written from evidence rather than reconstructed from memory.
 
 - [ ] Session 1: scaffold created, ingest + split + A/B experiment.
 
+## Why is the measured effect (0.017 AUROC) smaller than 42.3% patient overlap suggests?
+
+Report-only investigation, no pipeline changes, no training re-run. Three
+candidate explanations tested against evidence, plus the duplicate-pairs
+check originally planned for dedupe.py.
+
+### 1. Bilateral correlation (concordance rate) -- best-supported explanation
+
+Computed directly from the real data (keywords label strategy, reusing the
+actual adapter's `_derive_eye_column`/`_label_from_keyword_string`): among
+3034 multi-eye patients, fellow eyes share the same binary label for 2360
+of them -- **77.8% concordant, 22.2% discordant**.
+
+The right comparison isn't 77.8% vs. 100% -- it's 77.8% vs. what chance
+alone would give at this class balance (44.96% normal / 55.04% abnormal):
+P(both normal) + P(both abnormal) = 0.4496^2 + 0.5504^2 = **50.5% by chance
+alone**. So there is a real, substantial positive bilateral correlation
+(77.8% vs. a 50.5% chance floor) -- but it is far short of the ~100% that
+would make leaking a patient's identity equivalent to leaking their label
+outright. For 22.2% of multi-eye patients, knowing one eye's label is
+actively uninformative or misleading about the fellow eye's.
+
+This directly explains the gap between "42.3% of patients leak across
+folds" and "only ~0.017 AUROC of measured effect": leaking a patient's
+identity does not mean leaking their label. It means leaking a
+noisy, ~78%-reliable hint about it, and only for the subset of leaked
+patients whose fellow-eye image actually ends up as an exploitable
+train/test pair, and only insofar as an 8-epoch ResNet18 actually learns
+and uses that hint (see #3). Every stage dilutes the raw overlap
+percentage; this stage alone caps the theoretical maximum benefit of
+leakage at roughly the concordance rate, not at 100%.
+
+### 2. Task coarseness -- plausible aggravating factor, not tested
+
+Class balance under the actual label strategy (keywords) is 44.96% normal
+/ 55.04% abnormal -- reasonably balanced, not the dominant issue on its
+own. But binary normal/abnormal collapses 8 original ODIR categories
+(N/D/G/C/A/H/M/O) into one "abnormal" bucket. Two different diseases in
+two different eyes both count as "abnormal" and therefore "concordant"
+under this task, even though they are unrelated conditions and a
+per-disease task would score them as discordant. Conversely, a specific
+disease (e.g. diabetic retinopathy, driven by systemic disease) is
+plausibly *more* bilaterally consistent than "any of 7 possible
+abnormalities," so a per-disease or multi-class task would likely show
+*higher* concordance and therefore a *larger* leakage effect than measured
+here. This is a real, plausible reason the binary task under-states the
+true leakage risk -- but it is an assessment, not a measurement (not run,
+per instruction), so it stays a hypothesis, not a finding.
+
+### 3. Model capacity -- evidence points away from this being the bottleneck
+
+Extracted the full per-epoch val AUROC trajectory for all 10 runs (5
+seeds x 2 arms) from the training log. Pattern across nearly every run:
+val AUROC rises for several epochs, peaks, then **declines** before
+patience (3) fires -- e.g. A seed42 peaks at epoch 5 (0.788) then falls to
+0.752 by epoch 8; A seed44 peaks at epoch 7 (0.784) then drops sharply to
+0.727 by epoch 10. This is the opposite of "still climbing when cut off":
+in most runs the best epoch is not the last one, and the tail after the
+peak is a real decline, not just noise sitting near the peak. That pattern
+argues *against* model capacity/undertraining being the main bottleneck --
+if the model were too weak to have exploited available leakage signal yet,
+truncated improvement (monotonic rise, cut short by patience) is what we'd
+expect to see, not rise-then-fall. It doesn't rule out a different
+architecture extracting more signal, but "ResNet18 just needed more
+epochs" is not what these curves show.
+
+Caveat shared with the epoch-variance finding already in this document:
+the curves are noisy and non-monotonic throughout (consistent with
+patience triggering on fluctuation), which makes any single verdict here
+less clean than the concordance measurement above. Treated as suggestive,
+not conclusive.
+
+### Duplicate pairs (the check originally planned for dedupe.py)
+
+phash (imagehash, 64-bit) computed for all 6392 images. At the **configured**
+threshold (`dedupe.phash_hamming_max: 6`): 13733 near-duplicate pairs,
+almost entirely cross-patient (13730 of 13733). That number is not what it
+looks like -- visually inspected several flagged pairs (e.g. patient 0 vs
+549, patient 156's own left vs right eye) and they are clearly different
+photographs that merely share fundus photography's generic macro-structure
+(dark background, circular FOV, similar framing). **hamming<=6 is far too
+loose for this domain and produces a large false-positive rate; it should
+not be trusted as configured.** This also directly answers the fellow-eye
+concern: 3 same-patient (fellow-eye) pairs were flagged at this threshold,
+and the one inspected (patient 156) is visibly not a duplicate -- the
+threshold is too loose in exactly the way that would incorrectly flag
+fellow eyes, confirming the config's own warning needs heeding before
+dedupe.py is built for real.
+
+Tightening to the strictest possible bucket, hamming==0 (bit-identical
+64-bit hash): 14 pairs, still 0 same-patient. Verified each with actual
+pixel difference (mean absolute difference per pixel, 0-255 scale), since
+even a perfect hash match is a probabilistic signal, not proof:
+
+- **2 pairs are genuine duplicates**, confirmed on both eyes: patient 352
+  vs 973 (mean abs diff 0.00 and 0.01 on right/left) and patient 2487 vs
+  3185 (0.01 and 0.00). Different MD5 (different JPEG encoding) but
+  pixel-identical content on decode -- the same underlying photograph,
+  filed under two different patient IDs. **This is the genuine dataset
+  integrity problem flagged loudly, as instructed**: two pairs of distinct
+  "patients" in this dataset are, going by their images, almost certainly
+  the same real capture duplicated across IDs.
+- The other 12 (11 remaining pairs, one already double-counted above) are
+  hash collisions with real pixel differences of 15-60/255 -- false
+  positives, confirming even hamming==0 needs a secondary check (pixel
+  diff or an embedding, as CLAUDE.md's dual-method design already
+  anticipates) rather than being trusted alone.
+
+Checked where the two genuine duplicate pairs land: **both pairs sit in
+the `train` fold under both `image_random` and `patient_group`** -- so
+this specific duplication happens not to be inflating the current A/B
+measurement, but only by chance. Patient-grouped splitting does **not**
+protect against this class of leakage: 352 and 973 are different
+declared patient IDs, so `patient_group` has no reason to keep them
+together -- it would be entirely possible for one copy to land in train
+and the other in test under a different seed, and nothing in the current
+split logic would catch it. Only deduplication closes this gap; it is a
+distinct failure mode from the image-vs-patient-level splitting question
+the rest of this project measures.
+
+### Recommendation
+
+**Bilateral discordance (22.2%) is the best-supported explanation**, and
+matches the hypothesis bet on in advance: it is directly measured (not
+assessed or inferred), the chance-baseline comparison (77.8% vs. 50.5%)
+makes the dilution mechanism concrete and quantifiable, and it requires no
+additional untested assumptions. Task coarseness is a plausible
+compounding factor pointing the same direction (binary task likely
+*understates* true leakage-sensitivity) but is untested by design. Model
+capacity is the least supported of the three -- the training curves show
+peak-then-decline, not truncated-still-improving, arguing against
+"ResNet18 was too weak to use the leakage" as the story.
+
+Unplanned but material finding: 2 genuine cross-patient duplicate pairs
+exist in the raw data (dataset integrity issue, not a splitting-code
+issue), and the configured phash threshold is demonstrably too loose for
+this image domain -- both are inputs the eventual dedupe.py work needs,
+not just this investigation.
+
 ## Full-scale A/B run: 5 seeds, full dataset, GPU (cu126) -- real result
 
 Superseded the exploratory CPU run below. Full dataset (subsample_n=null),
@@ -127,12 +266,22 @@ circular) at 80% power / alpha=0.05 two-sided:
 | AUPRC | 0.02 | 0.0089 | 2 |
 | Sens@95%Spec | 0.05 | 0.0349 | 4 |
 
-Note the contrast with the (now-removed) circular calculation: for an
-effect as large as what would actually be considered practically
-meaningful, 5 seeds is *already* comfortably enough power. The earlier
-"~31 seeds" number was only large because it was solving for detecting the
-*exact tiny effect observed* -- a target nobody would have chosen in
-advance, and not one worth chasing.
+**Correction to how this table should be read (caught on a later pass):**
+"5 seeds is sufficient (4 needed)" is not the right conclusion to draw from
+it, and saying so was misleading. n=4 is how many seeds this design would
+need to reliably detect an effect *if the true effect were as large as the
+chosen practical floor (0.02 AUROC/AUPRC)*. It is a statement about the
+design's power against a threshold, not a statement about what was found.
+What was actually observed -- 0.0173 AUROC, 0.0117 AUPRC -- is *smaller*
+than that floor in both cases. The correct statement is: **this study was
+adequately powered to detect an effect large enough to matter by the
+standard stated above, and the effect it actually measured is smaller than
+that standard.** That is weaker than "the study found a practically
+meaningful effect with room to spare," and it is a different claim than the
+power number alone conveys -- the power number describes the ruler, not
+what got measured with it. (The earlier, now-removed "~31 seeds" figure
+made the opposite-flavoured mistake: it solved for detecting the exact
+observed effect, a target nobody would choose in advance.)
 
 **Net honest read, corrected twice now:** nothing in this study clears a
 consistently-applied Bonferroni bar at n=5, including the sign test that

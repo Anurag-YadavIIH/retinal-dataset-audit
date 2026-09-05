@@ -12,18 +12,37 @@ The model here is deliberately boring. The data path is the contribution.
 
 ## Headline result
 
-> *Filled in after the first experiment run. Do not write numbers here until
-> they come out of `artifacts/results.json`.*
+**42.3% of patients (1422/3358) land on both sides of a naive image-level
+split.** That number is exact — it's a count, not a statistic, and needs no
+significance test: under `image_random`, nearly half the dataset's patients
+have at least one eye in one fold and their fellow eye in another. Grouped
+splitting (`patient_group`) eliminates this outright — 0 patients cross a
+fold boundary, by construction, every time. This is the leakage the rest of
+this project measures the downstream cost of.
 
-| Arm | Data | Split | AUROC | AUPRC | Sens @ 95% Spec |
-|-----|------|-------|-------|-------|-----------------|
-| A | raw | image-level random | – | – | – |
-| B | raw | patient-level grouped | – | – | – |
-| C | quality-curated | patient-level grouped | – | – | – |
-| D | curated + deduplicated | patient-level grouped | – | – | – |
+### Downstream effect on a trained model (arms A vs. B, 5 seeds, full dataset)
 
-All arms use the same seed, the same ResNet18 hyperparameters, and matched
-training-set sizes, so the only variable is the data path.
+| Metric | A (image_random) | B (patient_group) | Mean diff (A−B) | 95% CI | Bonferroni-adjusted |
+|---|---|---|---|---|---|
+| AUROC | 0.8098 ± 0.0069 | 0.7926 ± 0.0083 | 0.0173 | [0.0018, 0.0328] | [-0.0048, 0.0394] |
+| AUPRC | 0.8567 ± 0.0052 | 0.8450 ± 0.0060 | 0.0117 | [0.0007, 0.0227] | [-0.0040, 0.0274] |
+| Sens @ 95% Spec | 0.4554 ± 0.0262 | 0.4378 ± 0.0102 | 0.0176 | [-0.0258, 0.0610] | [-0.0443, 0.0795] |
+
+Reported honestly, not inflated and not buried: the direction is
+consistent across all 5/5 seeds on AUROC and AUPRC, and the uncorrected 95%
+CIs exclude zero — but neither survives Bonferroni correction for testing
+3 metrics at this seed count (n=5). Sensitivity at 95% specificity shows no
+significant difference at all. **This is not a settled result.** It is
+consistent with a real, modest effect on the threshold-independent
+metrics, and the data cannot rule out zero (or a small effect in the wrong
+direction) once corrected. Full statistical detail, including why an
+earlier draft of this table overstated the evidence twice before landing
+here, is in `docs/notes.md`.
+
+Arms C and D (quality-curated, deduplicated) are not run yet — this table
+covers arms A and B only, on raw data. All arms use the same seed, the
+same ResNet18 hyperparameters, and matched training-set sizes, so the only
+variable is the data path.
 
 ---
 
