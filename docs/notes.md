@@ -7,6 +7,149 @@ written from evidence rather than reconstructed from memory.
 
 - [ ] Session 1: scaffold created, ingest + split + A/B experiment.
 
+## Full-scale A/B run: 5 seeds, full dataset, GPU (cu126) -- real result
+
+Superseded the exploratory CPU run below. Full dataset (subsample_n=null),
+epochs=15, early stopping (patience=3) on val AUROC, batch_size=32 (config
+default), amp=false, seeds 42-46. GPU timing check first: batch_size=16
+used 0.67GB VRAM/43.5s/epoch, batch_size=32 used 1.13GB/39.0s/epoch (faster
+AND still far under the 4GB budget) -- used 32. Worst-case estimate before
+running was ~1.85h for all 10 runs; actual wall time was ~64 min, since
+early stopping triggered at epoch 6-10 in every run, never reaching 15.
+
+Train-set size confirmed matched before this run: A=4473 images/3003
+patients, B=4474/2350, both ~45.0%/55.0% class balance. The 1-image gap is
+auto-corrected by match_arm_sizes (log: "Capped train set from 4474 to
+4473"). The patient-count difference (3003 vs 2350) is expected, not a
+defect -- image-level vs. patient-level grouping need different patient
+counts to reach the same image count. So none of the earlier 0.098-AUROC
+(n=800, 2 seeds) gap was dataset-difference; that question is now moot
+anyway since this full-scale run supersedes it.
+
+Mean +/- std across 5 seeds (ddof=1):
+
+| metric | A (image_random) | B (patient_group) | paired diff (A-B) | paired t-test |
+|---|---|---|---|---|
+| AUROC | 0.8098 +/- 0.0069 | 0.7926 +/- 0.0083 | 0.0173 +/- 0.0125 | t=3.09, p=0.037 |
+| AUPRC | 0.8567 +/- 0.0052 | 0.8450 +/- 0.0060 | 0.0117 +/- 0.0089 | t=2.96, p=0.042 |
+| Sens@95%Spec | 0.4554 +/- 0.0262 | 0.4378 +/- 0.0102 | 0.0176 +/- 0.0349 | t=1.13, p=0.323 |
+
+Per-seed values (the mean/std above compress this -- this is the actual spread):
+
+| seed | A AUROC | B AUROC | A AUPRC | B AUPRC | A Sens@95 | B Sens@95 | A stop epoch | B stop epoch |
+|---|---|---|---|---|---|---|---|---|
+| 42 | 0.8151 | 0.7895 | 0.8636 | 0.8418 | 0.4943 | 0.4233 | 8 | 10 |
+| 43 | 0.8155 | 0.7815 | 0.8564 | 0.8386 | 0.4361 | 0.4517 | 7 | 8 |
+| 44 | 0.8105 | 0.7949 | 0.8560 | 0.8424 | 0.4290 | 0.4375 | 10 | 7 |
+| 45 | 0.7984 | 0.7925 | 0.8492 | 0.8487 | 0.4503 | 0.4403 | 8 | 10 |
+| 46 | 0.8097 | 0.8044 | 0.8585 | 0.8536 | 0.4673 | 0.4361 | 6 | 8 |
+
+**Early-stop epoch, out of a 15-epoch budget (patience=3): A ranges 6-10
+(std 1.48), B ranges 7-10 (std 1.34).** That is real spread, and the
+exploratory small-scale CPU run's own epoch-by-epoch log already showed val
+AUROC bouncing non-monotonically (0.73 -> 0.65 -> 0.73 -> 0.77 across 4
+epochs). A 4-epoch range in *where* patience triggers is consistent with
+that same pattern here: patience is very plausibly triggering on val-AUROC
+fluctuation rather than a clean plateau. That matters for how "seed noise"
+should be read -- it is not purely weight-init/batch-order randomness, it
+is confounded with noise in *which* epoch got selected as best. Not treated
+as invalidating the result below, but it is a real caveat on what the
+between-seed variance is actually measuring, not just how large it is.
+
+**Correction #1 (this section was revised twice; both corrections below
+were caught by review, not found independently -- recorded so the process
+is visible, not just the final numbers).**
+
+The first revision fixed the t-tests overstating things (multiple
+comparisons) by promoting the sign test as the thing that "actually carries
+the conclusion" at p=0.031, one-sided. That repeated the same mistake one
+level up: p=0.031 does not clear the p<0.0167 bar this document itself set
+for the family of 3 metrics either. Holding the sign test to a different,
+looser standard than the t-tests -- after explicitly invoking that standard
+to demote the t-tests two paragraphs earlier -- is not a fix, it is moving
+the goalposts to keep a preferred conclusion. Applying the same bar
+consistently: **nothing in this study clears p<0.0167 at n=5 seeds,
+including the sign test.**
+
+Worth stating precisely, because it is a fact about this design and not
+about whether a real effect exists: the *best possible* one-sided sign-test
+p-value at n=5 is (1/2)^5 = 0.03125, which is above 0.0167 regardless of
+outcome. Five seeds cannot reach this corrected bar via the sign test even
+with a perfect 5/5 result. Six seeds could: (1/2)^6 = 0.0156 < 0.0167. That
+is a one-seed gap, not a large one, but it is real and this run does not
+close it.
+
+**Correction #2: the "~31 seeds" power calculation was circular.** Power
+computed from the observed effect size is a monotone transform of the
+p-value already reported -- it restates significance in different units
+and adds no information beyond "this effect, if exactly this size, was
+hard to detect at n=5," which is just p=0.32 said more elaborately. Removed.
+Replaced with the confidence interval on the paired difference, which says
+something the power number could not: what range of true effects is
+consistent with the data, including effects in the wrong direction.
+
+95% CI (t(4)=2.776, uncorrected) and Bonferroni-adjusted CI (98.33%,
+t(4)=3.958, matching the p<0.0167 bar used above) on the paired difference,
+all three metrics:
+
+| metric | mean diff | 95% CI | Bonferroni-adjusted CI |
+|---|---|---|---|
+| AUROC | 0.0173 | [0.0018, 0.0328] | [-0.0048, 0.0394] |
+| AUPRC | 0.0117 | [0.0007, 0.0227] | [-0.0040, 0.0274] |
+| Sens@95%Spec | 0.0176 | [-0.0258, 0.0610] | [-0.0443, 0.0795] |
+
+The uncorrected AUROC/AUPRC intervals exclude zero (consistent with their
+uncorrected p<0.05); once corrected for testing 3 metrics, both intervals
+*include* zero -- the same fact as "neither t-test clears p<0.0167,"
+expressed as a range instead of a threshold, and a more honest one to look
+at: even AUROC's data are consistent with anything from a small effect in
+the wrong direction (-0.005) to more than double what was observed
+(+0.039). Sens@95%Spec's interval is wider than the effect itself in both
+directions -- consistent with a moderate effect either way, or none.
+
+**Sample size, done properly this time: chosen in advance, not from what
+was observed.** Picking a floor for "smallest effect that would matter in
+practice" is a judgment call and is stated as one: 0.02 AUROC/AUPRC (a
+common rough convention for the smallest AUROC/AUPRC gap treated as
+practically distinguishable across pipeline comparisons in applied ML --
+below that, most published benchmarks would not treat two numbers as
+meaningfully different) and 0.05 for Sens@95%Spec (clinical screening
+discussions of sensitivity tend to move in ~5-point increments; a 1-2 point
+shift is not what would change a triage decision). These are defaults, not
+measurements -- override them if domain judgement says otherwise. Using
+those targets with the *observed* noise (sd of paired differences, which is
+a variance estimate, not an effect-size estimate, so using it here is not
+circular) at 80% power / alpha=0.05 two-sided:
+
+| metric | target effect (chosen) | observed sd | seeds needed |
+|---|---|---|---|
+| AUROC | 0.02 | 0.0125 | 4 |
+| AUPRC | 0.02 | 0.0089 | 2 |
+| Sens@95%Spec | 0.05 | 0.0349 | 4 |
+
+Note the contrast with the (now-removed) circular calculation: for an
+effect as large as what would actually be considered practically
+meaningful, 5 seeds is *already* comfortably enough power. The earlier
+"~31 seeds" number was only large because it was solving for detecting the
+*exact tiny effect observed* -- a target nobody would have chosen in
+advance, and not one worth chasing.
+
+**Net honest read, corrected twice now:** nothing in this study clears a
+consistently-applied Bonferroni bar at n=5, including the sign test that
+the first correction leaned on -- that was this document moving the
+goalposts, caught on the second pass, not found independently. The
+Bonferroni-adjusted confidence intervals for AUROC and AUPRC include zero;
+the uncorrected ones do not, and all 5/5 seeds agree on direction, which is
+suggestive but not, by this document's own stated standard, sufficient.
+Read plainly: this run is *consistent with* leakage inflating AUROC/AUPRC
+by a small amount, and *cannot rule out* zero or even a small effect in the
+wrong direction once corrected -- and for Sens@95%Spec, the data are
+consistent with a moderate effect in either direction. That is the honest
+state of n=5. More seeds (6 for the sign test to even structurally reach
+the corrected bar; the study is already adequately powered for the
+practical-effect thresholds above) would narrow this; nothing here should
+be written up as a settled result at this seed count.
+
 ## First A/B training run (small, CPU, exploratory -- not the headline number)
 
 Ran train.py + experiment.py for the first time: arm A, arm B (seed 42),
