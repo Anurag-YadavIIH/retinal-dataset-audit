@@ -81,6 +81,53 @@ Images are **not** committed to this repository. See
 
 ---
 
+## Environment setup
+
+On Windows, use [`scripts/setup_env.ps1`](scripts/setup_env.ps1) rather than
+the generic Quickstart below — it's documentation-as-script for exactly how
+this project's dev environment is built, including the parts that are easy
+to get wrong (torch is a separate, opt-in, 2-3 GB step; see
+[Non-negotiable rules](CLAUDE.md) on staying CPU-first for everything except
+`train`).
+
+```powershell
+# Anaconda users: run this first, however many envs are stacked.
+conda deactivate
+
+# Base env: .venv + requirements.txt (torch/torchvision excluded) + editable install.
+.\scripts\setup_env.ps1
+
+# When you're ready for GPU training (2-3 GB download, run on its own):
+.\scripts\setup_env.ps1 -IncludeCudaTorch
+```
+
+Every command after this uses the venv's interpreter by **explicit path**,
+not `activate` — a fresh shell doesn't inherit an activated venv, and this
+project's own tooling was built assuming that:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m retinaprep ingest
+```
+
+Then check the environment itself with
+[`scripts/doctor.py`](scripts/doctor.py) — Python version and interpreter
+path, whether torch is installed and CUDA-capable, and (the check this
+script exists for) whether the installed build actually still ships kernels
+for this machine's GPU rather than merely reporting `cuda.is_available() ==
+True`:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\doctor.py
+```
+
+It exits non-zero only on a real problem (e.g. GPU kernels missing for this
+card's compute capability, or a matmul that fails despite CUDA reporting
+available) — torch being absent, or the raw dataset not being downloaded
+yet, are both normal states it reports without failing.
+
+---
+
 ## Quickstart
 
 ```bash
