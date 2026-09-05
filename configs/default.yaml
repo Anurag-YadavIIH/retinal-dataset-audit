@@ -70,8 +70,11 @@ train:
   early_stop_patience: 3
   # cuda -> mps -> cpu, first available; set explicitly (e.g. "cpu") to force one.
   device: auto
-  # Mixed precision. Only takes effect on cuda; off by default because the
-  # dev box is CPU-only until the CUDA torch build lands.
+  # Mixed precision. Only takes effect on cuda; off by default. This dev
+  # box's GPU (GTX 1050, Pascal) has no tensor cores, so fp16 autocast saves
+  # memory but not wall-clock time here -- turning it on would trade
+  # numerical headroom for nothing on this card. Worth revisiting on a
+  # Turing-or-newer GPU.
   amp: false
 
 experiment:
@@ -79,6 +82,10 @@ experiment:
   # Force all arms to the same training-set size so curation is not
   # confounded with dataset size.
   match_arm_sizes: true
+  # Seeds to run per arm when none is passed explicitly: [seed, seed+1, ...].
+  # Override on the CLI, e.g. --set experiment.n_seeds=5, rather than editing
+  # this file for a one-off run.
+  n_seeds: 1
 
 report:
   output_html: artifacts/qc_report.html

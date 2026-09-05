@@ -66,12 +66,17 @@ def run_experiment(
     *,
     run_name: str | None = None,
     seed_override: int | None = None,
-) -> dict:
-    """Run one arm, then (re)write artifacts/results_table.md from every run so far.
+) -> list[dict]:
+    """Run one arm across cfg.experiment.n_seeds seeds, write the results table.
 
-    `run_name`/`seed_override` exist for things like re-running one arm under
-    a different seed to measure seed noise -- not exposed on the CLI, since
-    that's a one-off investigation, not a standard invocation shape.
+    Seeds are `[cfg["seed"], cfg["seed"] + 1, ..., cfg["seed"] + n_seeds - 1]`
+    unless `seed_override` pins a single specific seed (e.g. for an ad hoc
+    rerun) -- in which case exactly one run happens, at that seed, and
+    `run_name` is used as given rather than seed-suffixed.
+
+    Returns a list of the run_train() result dicts, one per seed, in seed
+    order -- for aggregating mean/std across seeds without re-reading every
+    metrics.json back off disk.
     """
     if arm is None:
         raise SystemExit(f"Specify --arm (one of {sorted(ARMS)}).")
@@ -87,18 +92,30 @@ def run_experiment(
 
     from retinaprep.train import run_train
 
+    if seed_override is not None:
+        seeds = [seed_override]
+        run_names = [run_name or f"{arm}_seed{seed_override}"]
+    else:
+        n_seeds = cfg["experiment"].get("n_seeds", 1)
+        seeds = [cfg["seed"] + i for i in range(n_seeds)]
+        base_name = run_name or arm
+        run_names = [f"{base_name}_seed{s}" for s in seeds]
+
     train_size_cap = _compute_train_size_cap(cfg)
-    result = run_train(
-        cfg,
-        split_name=spec["split"],
-        run_name=run_name or arm,
-        arm=arm,
-        seed_override=seed_override,
-        train_size_cap=train_size_cap,
-    )
+    results = [
+        run_train(
+            cfg,
+            split_name=spec["split"],
+            run_name=rn,
+            arm=arm,
+            seed_override=seed,
+            train_size_cap=train_size_cap,
+        )
+        for seed, rn in zip(seeds, run_names, strict=True)
+    ]
 
     write_results_table(cfg)
-    return result
+    return results
 
 
 def write_results_table(cfg: dict) -> None:
