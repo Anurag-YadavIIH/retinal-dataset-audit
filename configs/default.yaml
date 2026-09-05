@@ -20,9 +20,13 @@ dataset:
 label:
   # Binary task: 0 = normal, 1 = abnormal.
   # Derivation rule must be documented in the README, not just implied here.
-  # "normal_column" uses the ODIR one-hot N column; "keywords" parses the
-  # diagnostic keyword strings. Start with normal_column.
-  strategy: normal_column
+  # "normal_column" uses the ODIR one-hot N column (patient-level: mislabels
+  # the healthy eye of a unilaterally-diseased patient). "keywords" parses
+  # the per-eye diagnostic keyword string, and agrees with the per-eye
+  # `target` column on 100% of 6392 real rows -- see README data card for
+  # the investigation. Default is "keywords"; normal_column kept as a
+  # comparison, not because it's a live candidate.
+  strategy: keywords
   normal_column: N
 
 quality:

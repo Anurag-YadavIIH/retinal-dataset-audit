@@ -70,28 +70,42 @@ report   -> self-contained HTML QC report
 | Patient-level labels | N, D, G, C, A, H, M, O (8 classes) |
 | Task here | Binary: normal vs abnormal |
 | Licence | *Check the Kaggle page and record the exact terms here before publishing results.* |
-| Known limitations | Class imbalance (67% abnormal); the N/D/G/C/A/H/M/O one-hot flags are genuinely patient-level (confirmed: 0 variation within either eye of a patient, across all 8 columns); 324/3358 patients (9.6%) have only one usable eye in `preprocessed_images/`, so "two eyes per patient" cannot be assumed anywhere in the code; camera confound across centres; annotation quality varies |
+| Known limitations | Class imbalance (55% abnormal under the default label rule); 324/3358 patients (9.6%) have only one usable eye in `preprocessed_images/`, so "two eyes per patient" cannot be assumed anywhere in the code; camera confound across centres; annotation quality varies |
 
-**Label derivation rule:** `label.strategy: normal_column` (default) uses the
-patient-level `N` flag, so both eyes of a patient always get the same label —
-2101/6392 rows (32.9%) normal. The alternative `keywords` strategy parses the
+**Label derivation rule:** `label.strategy: keywords` (default) parses the
 per-eye `{Left,Right}-Diagnostic Keywords` string for the literal phrase
-"normal fundus" — 2874/6392 rows (45.0%) normal. The two rules disagree on
-**12.1%** of rows. `normal_column` is the more defensible default specifically
-*because* it never claims eye-specific signal it doesn't have; `keywords` is
-noisier (free-text parsing) but is the only one of the two that actually can
-vary per eye.
+"normal fundus" — 2874/6392 rows (45.0%) normal. `normal_column` (the
+patient-level `N` one-hot flag, both eyes forced to the same label) gives
+2101/6392 (32.9%) normal; the two disagree on **12.1%** of rows.
 
-**Surprising finding:** `target`/`labels` (full_df.csv's other two columns,
-which look like they should just be string-encodings of the same N/D/G/.../O
-one-hot vector) are **not** patient-level — they differ between a patient's
-two eyes for 888/3034 multi-eye patients (29.3%), confirmed empirically by
-grouping on `ID`. Something upstream evidently derived them per-eye rather
-than copying the patient vector. Neither column is used by this adapter's
-label logic, but it's a reminder that "looks derived from column X" is a
-claim worth checking, not assuming — which is exactly why
-`adapters/odir5k.py._report_label_locality` checks this instead of asserting
-it.
+**Why keywords, not normal_column — this was investigated, not assumed:**
+`target`/`labels` (full_df.csv's other two columns, which look like they
+should just be string-encodings of the patient-level N/D/G/.../O vector)
+turned out **not** to be patient-level — they differ between a patient's
+two eyes for 888/3034 multi-eye patients (29.3%), confirmed empirically
+(`adapters/odir5k.py._report_label_locality`) rather than assumed. That
+raised the question of which label source is actually right. Checking:
+
+- `keywords` vs `target` agree on **100.0%** of all 6392 rows.
+- Of the 675 patients where a target-derived label differs across eyes,
+  `keywords` also differs for 674 (99.9%) — and the reverse holds too.
+  Two independently-authored eye-level signals agreeing this precisely is
+  strong evidence both are measuring the same real per-eye ground truth.
+- Eyeballing 10 sampled normal_column-vs-keywords disagreements: all 10 are
+  the same failure mode — a unilaterally-diseased patient (patient-level
+  `N=0`) whose *other* eye carries the pathology, while this eye's own
+  keyword string literally reads "normal fundus" (and `target` agrees).
+  `normal_column` mislabels every one of these healthy fellow-eyes as
+  abnormal — exactly the failure mode bilateral-disease correlation
+  predicts, made concrete.
+
+`keywords` is therefore the default; `normal_column` is retained,
+selectable, and used as a comparison, not because it's a live candidate on
+correctness grounds. The class-balance shift between the two (32.9% vs
+45.0% normal) is itself a data-curation decision with a measurable effect
+on the headline numbers, before curation or splitting are even in play —
+which is exactly this project's thesis applied one layer earlier than
+usual. Full investigation: `docs/notes.md`.
 
 Images are **not** committed to this repository. See
 [`scripts/download_data.sh`](scripts/download_data.sh).

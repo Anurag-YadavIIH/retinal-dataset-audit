@@ -7,6 +7,51 @@ written from evidence rather than reconstructed from memory.
 
 - [ ] Session 1: scaffold created, ingest + split + A/B experiment.
 
+## Label strategy default switched: normal_column -> keywords
+
+Investigated whether the patient-level `N` one-hot flag (`normal_column`)
+or the per-eye diagnostic keyword string (`keywords`) is the more faithful
+binary label, prompted by the earlier finding that `target`/`labels` vary
+per-eye for 888/3034 multi-eye patients despite N/D/G/.../O never varying.
+
+Real full_df.csv (6392 rows), reusing the actual adapter's
+`_derive_eye_column`/`_label_from_keyword_string`:
+
+- Pairwise agreement: normal_column vs keywords 87.9%, normal_column vs
+  target 87.9%, **keywords vs target 100.0%** (every one of 6392 rows).
+- Of the 675 patients where a target-derived binary label differs across
+  eyes, keywords also differs for 674 (99.9%) -- and the reverse holds too
+  (674/674, 100%). Two independently-authored eye-level signals agreeing
+  this precisely is about as strong as evidence gets that both are
+  measuring the same real eye-level ground truth, not encoding noise.
+- Eyeballed 10 sampled normal_column-vs-keywords disagreements: all 10 are
+  the same failure mode -- a unilaterally-diseased patient (patient-level
+  N=0) whose *other* eye has the pathology, while this eye's own keyword
+  string literally reads "normal fundus" and target agrees. normal_column
+  mislabels every one of these healthy fellow-eyes as abnormal.
+
+Conclusion: `keywords` is the better-supported eye-level label; switched
+`configs/default.yaml`'s `label.strategy` default from `normal_column` to
+`keywords`. `normal_column` stays implemented and selectable -- it's kept
+as a comparison arm, not because it's a live candidate for correctness.
+
+This also changes overall class balance: normal_column gave 2101/6392
+(32.9%) normal; keywords gives 2874/6392 (45.0%) normal. That shift is
+itself a data-curation decision with a measurable effect on the headline
+numbers -- worth calling out plainly in the eventual writeup as exactly
+the kind of choice this project exists to make visible, not just the
+split strategy.
+
+## Do not horizontally flip fundus images
+
+Left/right eye is a real label here (bilateral disease correlation is the
+whole premise of the patient-level split), and disc position relative to
+the macula is a genuine anatomical cue a model can legitimately learn from.
+A horizontal flip turns a left eye into an (anatomically wrong) right eye,
+quietly corrupting that cue and, worse, is a leakage-adjacent trick that
+would inflate scores by handing the model something it shouldn't be able
+to infer that way. Light augmentation (small rotation, no flip) only.
+
 ## CUDA wheel pin (scripts/setup_env.ps1) is hardware-specific to this box
 
 Dev GPU is a GTX 1050 -- Pascal, compute capability 6.1 ("sm_61"). PyTorch's
