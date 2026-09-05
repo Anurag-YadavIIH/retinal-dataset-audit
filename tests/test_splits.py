@@ -41,6 +41,7 @@ def test_split_fractions_are_respected(synthetic_fundus_dir, synthetic_cfg):
     group_split = patient_group_split(manifest, synthetic_cfg)
     assert len(group_split["train"]) + len(group_split["val"]) + len(group_split["test"]) == n
     # Group-constrained stratification is only approximate on a dataset this
-    # small (14 patients), so allow a wider tolerance than the unconstrained split.
+    # small (15 patients, one of them single-eye), so allow a wider tolerance
+    # than the unconstrained split.
     assert abs(len(group_split["test"]) / n - test_frac) < 0.15
     assert abs(len(group_split["val"]) / n - val_frac) < 0.15

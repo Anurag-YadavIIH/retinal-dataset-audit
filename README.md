@@ -70,11 +70,28 @@ report   -> self-contained HTML QC report
 | Patient-level labels | N, D, G, C, A, H, M, O (8 classes) |
 | Task here | Binary: normal vs abnormal |
 | Licence | *Check the Kaggle page and record the exact terms here before publishing results.* |
-| Known limitations | Class imbalance; labels are patient-level, not eye-level; camera confound across centres; annotation quality varies |
+| Known limitations | Class imbalance (67% abnormal); the N/D/G/C/A/H/M/O one-hot flags are genuinely patient-level (confirmed: 0 variation within either eye of a patient, across all 8 columns); 324/3358 patients (9.6%) have only one usable eye in `preprocessed_images/`, so "two eyes per patient" cannot be assumed anywhere in the code; camera confound across centres; annotation quality varies |
 
-**Label derivation rule:** *documented here once implemented — state exactly how
-the patient-level one-hot columns were mapped onto individual eyes, and the
-disagreement rate against the per-eye diagnostic keyword strings.*
+**Label derivation rule:** `label.strategy: normal_column` (default) uses the
+patient-level `N` flag, so both eyes of a patient always get the same label —
+2101/6392 rows (32.9%) normal. The alternative `keywords` strategy parses the
+per-eye `{Left,Right}-Diagnostic Keywords` string for the literal phrase
+"normal fundus" — 2874/6392 rows (45.0%) normal. The two rules disagree on
+**12.1%** of rows. `normal_column` is the more defensible default specifically
+*because* it never claims eye-specific signal it doesn't have; `keywords` is
+noisier (free-text parsing) but is the only one of the two that actually can
+vary per eye.
+
+**Surprising finding:** `target`/`labels` (full_df.csv's other two columns,
+which look like they should just be string-encodings of the same N/D/G/.../O
+one-hot vector) are **not** patient-level — they differ between a patient's
+two eyes for 888/3034 multi-eye patients (29.3%), confirmed empirically by
+grouping on `ID`. Something upstream evidently derived them per-eye rather
+than copying the patient vector. Neither column is used by this adapter's
+label logic, but it's a reminder that "looks derived from column X" is a
+claim worth checking, not assuming — which is exactly why
+`adapters/odir5k.py._report_label_locality` checks this instead of asserting
+it.
 
 Images are **not** committed to this repository. See
 [`scripts/download_data.sh`](scripts/download_data.sh).

@@ -37,15 +37,25 @@ def _fundus_image(rng: np.random.Generator, brightness: int, dim_left: bool = Fa
 @pytest.fixture
 def synthetic_fundus_dir(tmp_path):
     """Generate a synthetic ODIR-5K-shaped raw dataset: an image directory plus
-    a wide per-patient metadata CSV at the conventional `full_df.csv` path.
+    a LONG (one row per eye) metadata CSV at the conventional `full_df.csv`
+    path, matching the real download's confirmed shape (6392 rows, 3358
+    unique IDs -- most patients have two rows, several hundred have one).
 
-    10 base patients (20 images, alternating normal/abnormal) plus 4 patients
-    hosting deliberately degraded variants, each paired with one clean
-    companion eye to keep the wide left/right layout intact:
+    10 base two-eye patients (20 images, alternating normal/abnormal), one
+    single-eye patient (ID 15, right eye only), and 4 patients hosting
+    deliberately degraded variants, each paired with one clean companion eye:
       - patient 11: blurred right eye (Gaussian blur)
       - patient 12: darkened left eye (low exposure)
       - patient 13: one-side-dimmed left eye (illumination non-uniformity)
       - patient 14: left eye is a byte-identical duplicate of patient 1's left eye
+
+    `Left-Fundus`/`Right-Fundus` are populated for both sides on every row
+    regardless of which side's row/file actually exists, mirroring the real
+    dataset's own quirk (these columns describe the patient record, not file
+    existence) -- the adapter derives `eye` and `image_path` from `filename`
+    instead, precisely because that quirk makes the other two columns
+    unreliable for that purpose. `target`/`labels` are identical across a
+    patient's rows, matching the real data's patient-level locality.
 
     Returns (data_root, metadata_dataframe). The CSV is already written to
     data_root / "full_df.csv" so a cfg pointed at data_root can be fed
@@ -58,23 +68,32 @@ def synthetic_fundus_dir(tmp_path):
 
     records: list[dict] = []
 
-    def add_patient(pid, age, sex, normal, left_img, right_img, left_kw, right_kw):
-        left_name = f"{pid}_left.jpg"
-        right_name = f"{pid}_right.jpg"
-        left_img.save(image_dir / left_name, quality=95)
-        right_img.save(image_dir / right_name, quality=95)
+    def add_row(pid, side, img, age, sex, normal, left_kw, right_kw, *, save_image=True):
+        name = f"{pid}_{side}.jpg"
+        if save_image:
+            img.save(image_dir / name, quality=95)
+        target_str = "[1, 0, 0, 0, 0, 0, 0, 0]" if normal else "[0, 1, 0, 0, 0, 0, 0, 0]"
+        labels_str = "['N']" if normal else "['D']"
         records.append(
             {
                 "ID": pid,
                 "Patient Age": age,
                 "Patient Sex": sex,
-                "Left-Fundus": left_name,
-                "Right-Fundus": right_name,
+                "Left-Fundus": f"{pid}_left.jpg",
+                "Right-Fundus": f"{pid}_right.jpg",
                 "Left-Diagnostic Keywords": left_kw,
                 "Right-Diagnostic Keywords": right_kw,
                 "N": 1 if normal else 0,
+                "filepath": f"../input/placeholder/{name}",
+                "labels": labels_str,
+                "target": target_str,
+                "filename": name,
             }
         )
+
+    def add_two_eye_patient(pid, age, sex, normal, left_img, right_img, left_kw, right_kw):
+        add_row(pid, "left", left_img, age, sex, normal, left_kw, right_kw)
+        add_row(pid, "right", right_img, age, sex, normal, left_kw, right_kw)
 
     normal_kw = "normal fundus"
     abnormal_kw = "moderate non proliferative retinopathy"
@@ -84,7 +103,7 @@ def synthetic_fundus_dir(tmp_path):
         img_l = _fundus_image(rng, brightness=190 if normal else 150)
         img_r = _fundus_image(rng, brightness=195 if normal else 145)
         kw = normal_kw if normal else abnormal_kw
-        add_patient(
+        add_two_eye_patient(
             pid,
             age=float(40 + pid) if pid != 5 else None,
             sex=("Male" if pid % 2 == 0 else "Female") if pid != 7 else None,
@@ -98,29 +117,24 @@ def synthetic_fundus_dir(tmp_path):
     base_clean = _fundus_image(rng, brightness=190)
 
     blurred = base_clean.filter(ImageFilter.GaussianBlur(radius=6))
-    add_patient(11, 55.0, "Male", True, base_clean, blurred, normal_kw, normal_kw)
+    add_two_eye_patient(11, 55.0, "Male", True, base_clean, blurred, normal_kw, normal_kw)
 
     darkened = ImageEnhance.Brightness(base_clean).enhance(0.15)
-    add_patient(12, 61.0, "Female", True, darkened, base_clean, normal_kw, normal_kw)
+    add_two_eye_patient(12, 61.0, "Female", True, darkened, base_clean, normal_kw, normal_kw)
 
     dimmed = _fundus_image(rng, brightness=190, dim_left=True)
-    add_patient(13, 47.0, "Male", False, dimmed, base_clean, abnormal_kw, normal_kw)
+    add_two_eye_patient(13, 47.0, "Male", False, dimmed, base_clean, abnormal_kw, normal_kw)
 
-    duplicate_name = "14_left.jpg"
-    shutil.copyfile(image_dir / "1_left.jpg", image_dir / duplicate_name)
-    base_clean.save(image_dir / "14_right.jpg", quality=95)
-    records.append(
-        {
-            "ID": 14,
-            "Patient Age": 52.0,
-            "Patient Sex": "Female",
-            "Left-Fundus": duplicate_name,
-            "Right-Fundus": "14_right.jpg",
-            "Left-Diagnostic Keywords": normal_kw,
-            "Right-Diagnostic Keywords": normal_kw,
-            "N": 1,
-        }
-    )
+    # patient 1 is generated by the loop above, so 1_left.jpg already exists.
+    shutil.copyfile(image_dir / "1_left.jpg", image_dir / "14_left.jpg")
+    add_row(14, "left", None, 52.0, "Female", True, normal_kw, normal_kw, save_image=False)
+    add_row(14, "right", base_clean, 52.0, "Female", True, normal_kw, normal_kw)
+
+    # Single-eye patient: only a right eye exists. Left-Fundus/Right-Fundus
+    # and Left-Diagnostic Keywords are still populated per the real dataset's
+    # quirk, but no 15_left.jpg is ever written, and there is no left-eye row.
+    single_eye_img = _fundus_image(rng, brightness=192)
+    add_row(15, "right", single_eye_img, 63.0, "Male", True, normal_kw, normal_kw)
 
     metadata = pd.DataFrame.from_records(records)
     metadata.to_csv(data_root / "full_df.csv", index=False)
