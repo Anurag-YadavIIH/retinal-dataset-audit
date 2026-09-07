@@ -72,19 +72,35 @@ other candidate explanations tested and a training-curve analysis, is in
 Two things came out of investigating the effect size that are worth
 stating on their own, independent of the A/B result:
 
-**Two genuine cross-patient duplicates exist in the raw data** — patient
-352 vs. 973, and patient 2487 vs. 3185, each confirmed on *both* eyes
-(near-zero pixel difference despite different file encoding — the same
-photograph, filed under two different patient IDs). This is exactly why
-this pipeline needs both a grouped split *and* a deduplication stage, not
-just one: **patient-grouped splitting cannot catch this.** It only
-protects against a single declared patient ID crossing a fold boundary —
-it has no way to know that two *different* declared IDs are actually the
-same underlying capture. Only content-based deduplication closes that
-gap. (Both pairs currently happen to sit in the same fold under both
-split strategies, so they are not inflating the A/B numbers above — but
-that's luck, not protection, and a different seed could easily place one
-copy in train and the other in test.)
+**Eight genuine cross-patient duplicates exist in the raw data**, confirmed
+by pixel difference near zero despite different file encoding — the same
+photograph, filed under two different patient IDs, in every case: patients
+352↔973, 398↔668, and 2487↔3185 (each duplicated on *both* eyes), plus
+321↔1043, 3297↔4542, 31↔105, 1109↔1166, and 4330↔4552 (one eye each).
+This is exactly why this pipeline needs both a grouped split *and* a
+deduplication stage, not just one: **patient-grouped splitting cannot
+catch this.** It only protects against a single declared patient ID
+crossing a fold boundary — it has no way to know that two *different*
+declared IDs are actually the same underlying capture. Only content-based
+deduplication closes that gap. The money metric: of the 18 verified
+duplicate pairs found (8 by phash, 10 by embeddings, 6 found by both), 4
+straddle the `image_random` split's folds and 3 straddle
+`patient_group`'s — materially the same order of magnitude for both,
+confirming patient-grouping has no mechanism to catch this leak at all.
+
+*(This count moved from an earlier estimate of 2 to 8 during the project's
+own work, and the reason why is itself informative, not just a
+correction: an initial ad hoc check only pixel-verified phash's tightest
+sub-bucket — hamming distance exactly 0 — and found 2. The real dedupe
+module verifies *every* phash candidate at the configured hamming≤6
+threshold (13,733 of them) plus every embedding candidate, and found 8:
+two real duplicates were sitting at phash hamming distance 1–6, invisible
+to a hamming==0-only check, and three more were found only by the
+embedding method, whose whole purpose is catching same-content pairs that
+don't hash near-identically in the first place (different lighting/
+exposure). Neither method alone would have found all 8 — see
+`docs/notes.md` and `WALKTHROUGH.md` §7 for why both are necessary on this
+modality, not just complementary in theory.)*
 
 **Perceptual hashing (phash) is unreliable on fundus photography without
 a tight, verified threshold.** At the naive default (`hamming<=6`), phash
@@ -147,7 +163,25 @@ report   -> self-contained HTML QC report
 | Patient-level labels | N, D, G, C, A, H, M, O (8 classes) |
 | Task here | Binary: normal vs abnormal |
 | Licence | *Check the Kaggle page and record the exact terms here before publishing results.* |
-| Known limitations | Class imbalance (55% abnormal under the default label rule); 324/3358 patients (9.6%) have only one usable eye in `preprocessed_images/`, so "two eyes per patient" cannot be assumed anywhere in the code; camera confound across centres; annotation quality varies |
+| Known limitations | Class imbalance (55% abnormal under the default label rule); 324/3358 patients (9.6%) have only one usable eye in `preprocessed_images/`, so "two eyes per patient" cannot be assumed anywhere in the code; camera confound across centres; annotation quality varies; **quality scoring does not reliably catch uniform haze** (dense cataract / severe media opacity) — two essentially featureless, uniformly hazy images score 0.943 and 0.979, near the top of the entire dataset (see below) |
+
+**Quality scoring blind spot — uniform haze.** Two images with no visible
+vessel or disc structure at all (consistent with dense cataract or severe
+media opacity) score 0.943 and 0.979 out of 1.0 — among the highest scores
+in the whole dataset. This isn't a blur or exposure failure, which is what
+the current metrics measure: `illumination_uniformity` checks for *uneven*
+illumination (one side dark, one side bright), and uniform haze is by
+definition even, so it reads as good; the blur metrics (variance of
+Laplacian, Tenengrad) stay above threshold because moderate haze doesn't
+eliminate all high-frequency content — compression artifacts and faint
+specular reflections still register even when the retinal structure a
+clinician actually needs is gone. What's missing is a metric for *global
+contrast* or vessel visibility specifically — a contrast/entropy-style
+check, or a learned gradability classifier trained for exactly this
+failure mode, is the natural next step; classical per-pixel/per-quadrant
+statistics of the kind used here cannot structurally distinguish
+"uniformly hazy" from "uniformly clear." Full investigation in
+`docs/notes.md`.
 
 **Label derivation rule:** `label.strategy: keywords` (default) parses the
 per-eye `{Left,Right}-Diagnostic Keywords` string for the literal phrase

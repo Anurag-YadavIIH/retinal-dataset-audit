@@ -46,6 +46,44 @@ already found by phash (`31_left` vs `105_left`, `1109_right` vs
 two are unmistakably the same eye (near-identical vessel branching), not
 a plausible call.
 
+**Empirical justification for 0.99, not just "raised until false
+positives went away"**: computed cosine similarity for a 400-patient
+random sample of genuine fellow-eye pairs (CPU, to avoid any GPU
+contention with the arm C/D training run in progress) and for all 8
+confirmed duplicate pairs (11 pair-instances, 3 duplicated on both eyes).
+
+| | n | mean | min | max | 99.5th pct |
+|---|---|---|---|---|---|
+| Fellow-eye (sampled) | 400 patients | 0.933 | 0.770 | 0.975 | 0.973 |
+| Confirmed duplicates | 11 pairs | 0.993 | 0.962 | 1.000 | -- |
+
+This is *why* 0.98 caught fellow eyes and 0.99 mostly doesn't: a patient's
+two eyes are genuinely more similar to a generic ImageNet-pretrained
+ResNet18 than two random retinas are (bilateral anatomical/pigmentation
+similarity, not just chance) -- the fellow-eye distribution's own 99.5th
+percentile (0.973) sits close under 0.98, so a threshold anywhere near
+0.98 was always going to clip into the top of that distribution. 0.99
+clears it with room.
+
+**But the separation is not clean, and that matters more than the
+summary stats above suggest**: one confirmed duplicate, 3297 vs 4542
+(pixel-diff verified via phash), has cosine similarity **0.962** --
+*below* the fellow-eye sample's own maximum (0.975) and 99.5th percentile
+(0.973). No embedding threshold, at any value, would have caught this
+pair without also catching genuine fellow eyes -- it was only found
+because phash's independent, pixel-structure-based signal doesn't care
+that this particular duplicate's two copies apparently differ enough in
+surface appearance (lighting/color grading) to fool a semantic embedding.
+**This is the concrete, not-just-theoretical proof that both methods are
+structurally necessary**: of the 8 confirmed pairs, phash alone would
+have found all 8 (verified directly -- see above) but embeddings alone
+would have found only 7, permanently blind to 3297/4542 the same way
+phash alone was blind to nothing here (phash caught every pair; embedding
+methods and phash fail in *different* directions on this modality, not
+interchangeable ones -- see WALKTHROUGH.md 7 for the connection to the
+phash false-positive finding, which is the same underlying pattern from
+the opposite side).
+
 **Final result**, phash-verified (8 pairs) + embedding at the corrected
 0.99 threshold (10 pairs, 6 overlapping with phash): **11 distinct
 duplicate clusters, 22 images, across 8 unique patient-pairs** (3 pairs
@@ -304,6 +342,16 @@ even a perfect hash match is a probabilistic signal, not proof:
   diff or an embedding, as CLAUDE.md's dual-method design already
   anticipates) rather than being trusted alone.
 
+**[Superseded -- see "dedupe.py: phash verified properly this time" above,
+the entry immediately below the log at the top of this file.]** This ad
+hoc pass only pixel-verified phash's single tightest bucket (hamming==0,
+14 candidates). The real dedupe.py module verifies every phash candidate
+at the configured hamming<=6 (13,733 of them) plus every embedding
+candidate, and found **8** genuine pairs, not 2 -- this "2" figure was an
+artifact of checking only the strictest sub-threshold, not the true count.
+The two pairs found here are still correct as far as they go; they are a
+subset of the real 8, not wrong, just incomplete.
+
 Checked where the two genuine duplicate pairs land: **both pairs sit in
 the `train` fold under both `image_random` and `patient_group`** -- so
 this specific duplication happens not to be inflating the current A/B
@@ -314,7 +362,9 @@ together -- it would be entirely possible for one copy to land in train
 and the other in test under a different seed, and nothing in the current
 split logic would catch it. Only deduplication closes this gap; it is a
 distinct failure mode from the image-vs-patient-level splitting question
-the rest of this project measures.
+the rest of this project measures. (The full 8-pair money metric --
+4/18 straddling image_random, 3/18 straddling patient_group -- is in the
+superseding entry above.)
 
 ### Recommendation
 
@@ -333,7 +383,8 @@ Unplanned but material finding: 2 genuine cross-patient duplicate pairs
 exist in the raw data (dataset integrity issue, not a splitting-code
 issue), and the configured phash threshold is demonstrably too loose for
 this image domain -- both are inputs the eventual dedupe.py work needs,
-not just this investigation.
+not just this investigation. **(Updated once the real dedupe.py module
+ran: the true count is 8 pairs, not 2 -- see the entry above this one.)**
 
 ## Full-scale A/B run: 5 seeds, full dataset, GPU (cu126) -- real result
 

@@ -237,6 +237,24 @@ features, cosine similarity) catches the same eye photographed twice under
 different lighting or exposure, where the raw pixels differ substantially
 but the content doesn't.
 
+**The pattern underneath both threshold failures, stated once here because
+it explains both**: generic image-similarity methods — a 64-bit
+perceptual hash, an ImageNet-pretrained embedding — are calibrated on the
+assumption that "different photos" carry a certain amount of ordinary
+inter-image variation. Retinal fundus photographs have far less of that
+variation than the natural-image domains these methods were designed
+around: every image is a dark circular field with broadly similar
+framing, illumination, and colour palette, and — specific to this
+modality — a *patient's own two eyes* are anatomically more similar to
+each other than two random strangers' retinas are. Both thresholds
+shipped with this project's config (`phash_hamming_max: 6`,
+`embedding_cosine_min: 0.98`) were calibrated for the *general* case and
+were both too loose for this specific one, in the same direction, for the
+same underlying reason. This is the second time in this project a
+standard method needed fundus-specific tuning (quality's FOV-circularity
+check, §6, was the first) — worth naming as a pattern, not just two
+unrelated bugs.
+
 **Threshold validation, done honestly, twice over, in the same module**:
 
 - *phash*: the configured default (`hamming<=6`) flags 13733 candidate
@@ -261,6 +279,30 @@ but the content doesn't.
   zero fellow-eye false positives, 10 candidates, all confirmed by low
   pixel-difference and (for the 3 not already found by phash) direct
   visual inspection — unmistakably the same eye in each case.
+
+**Empirical justification for 0.99, not just "raised until the false
+positives went away"**: computed cosine similarity for a 400-patient
+sample of genuine fellow-eye pairs and for all 8 confirmed duplicate
+pairs (11 pair-instances). Fellow eyes: mean 0.933, max 0.975, 99.5th
+percentile 0.973 — confirming directly that a patient's own two eyes really
+do sit close to where genuine duplicates live in this embedding space, not
+just plausibly. Confirmed duplicates: mean 0.993, min 0.962. **0.99 sits
+just above the fellow-eye ceiling with real margin for 10 of the 11
+duplicate-pair-instances — but not for all of them.** One confirmed
+duplicate, 3297 vs 4542 (pixel-diff verified via phash), has cosine
+similarity 0.962 — *below* the fellow-eye sample's own maximum. No
+embedding threshold at any value would catch that pair without also
+catching genuine fellow eyes; it was found only because phash's
+independent, pixel-structure-based signal doesn't care that this
+particular duplicate's two copies happen to differ enough in surface
+appearance (lighting/colour grading) to read as dissimilar to a semantic
+embedding. **This is the concrete, not-just-theoretical reason two methods
+are needed**: of the 8 confirmed pairs, phash alone would have found all
+8; embeddings alone would have permanently missed one. They fail in
+different directions on this modality — phash over-triggers on shared
+macro-structure, embeddings under-triggers on genuine duplicates whose
+lighting diverged enough — and neither failure mode is visible from
+inside the other method.
 
 **Final, real dataset-integrity finding**: 11 distinct duplicate clusters,
 22 images, across 8 unique cross-patient pairs — the same underlying
