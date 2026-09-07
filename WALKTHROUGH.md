@@ -400,12 +400,27 @@ consistency) is in `docs/notes.md`; the headline of it:
   consistently across all 5/5 seeds, surviving Bonferroni correction
   across the 6-test family (p=0.0078 against a 0.00833 bar) — though the
   corrected CI's upper bound sits at -0.0002, a hair under zero, so this
-  is reported as a real but marginal finding, not a decisive one. A
-  plausible (not proven) mechanism: quality curation removes the
-  lowest-scoring images specifically, and it's entirely possible some of
-  those images were harder to grade by a human-legible standard without
-  being *uninformative* to a CNN — matching training-set *size* across
-  arms doesn't guarantee matching training-set *composition* effect.
+  is reported as a real but marginal finding, not a decisive one.
+  **Why, investigated with three hypotheses rather than left at the first
+  plausible-sounding one:** (1) *quality correlates with disease* —
+  tested and refuted in the opposite direction: the 43 rejects are 62.8%
+  normal against a 45.0% baseline (rejects skew normal, not abnormal;
+  p=0.019), and across all 6392 images abnormal examples score very
+  slightly *higher* quality on average, not lower (p=0.004). (2)
+  *composition, not size* — tested and confirmed, much larger than
+  expected: B's and C's actual training sets, both exactly 4435 images,
+  share only 69.2% of those images, because `patient_group_split` is
+  recomputed fresh per arm and `StratifiedGroupKFold` reassigns a large
+  fraction of fold membership from a small pool change. (3) *magnitude* —
+  removing 43 random, quality-uncorrelated images and re-splitting
+  produces 69.4% overlap with B's original training set, statistically
+  indistinguishable from the real 69.2%: the actual perturbation this
+  comparison measures is ~31% of the training set, not the <1% the raw
+  removal count implies. **Revised leading explanation**: split-algorithm
+  sensitivity to input perturbation, not curation removing informative
+  content — the original "informative-but-hard-to-grade" hypothesis was
+  the flattering account and didn't survive being checked. Full detail:
+  `docs/notes.md`.
 - **The A-vs-B gap itself did not replicate on this run.** Same nominal
   seeds, matched size within 0.85% of the original A/B-only run — and
   this time the AUROC gap was +0.0079 (not +0.0173), p=0.29 (not 0.037),
@@ -424,6 +439,39 @@ worth stating just as plainly for arm C, which *did* move a metric — just
 not in the direction curation is usually assumed to move it, and not by
 much. Full numbers, all four arms, both split strategies where
 applicable: `docs/notes.md` and `artifacts/results_table.md`.
+
+### Is the naive split unstable, not just optimistic?
+
+A second-sounding, independent argument for grouped splitting suggested
+itself from the second run's numbers: arm A's AUROC std is 0.0129 against
+arm B's 0.0028 — 4.6x — which would mean the naive split isn't just
+optimistic on average, its score also depends on *which* patients
+happened to straddle the fold boundary, making it less run-to-run stable
+too. Checked against the first A/B-only run before reporting it as a
+second confirmed finding, exactly the way the mean-difference finding was
+checked (§1) — **it does not hold up the same way in both runs.** In the
+first run, A was actually *less* variable than B on AUROC (0.0069 vs
+0.0083) and AUPRC — the opposite direction — and only sensitivity at 95%
+specificity showed A more variable there (2.58x), which is the metric
+showing the *weakest* version of the pattern in the second run (1.43x).
+No individual run's variance difference reaches conventional significance
+(Levene's test, smallest p=0.081); an informally pooled estimate across
+both runs (ratio ~1.8–2x for AUROC/AUPRC, treating the two runs' 5 seeds
+each as 10, with the caveat that the runs used slightly different
+training-set caps) is directionally suggestive but still not significant
+(p=0.08–0.20) at this sample size.
+
+**Reported honestly rather than promoted to a second headline finding**:
+this does not clear the bar every other claim in this project has been
+held to. It was hoped this would be "a result that replicated when the
+headline didn't" — checking it against the first run the same way the
+mean-difference was checked shows that's not an accurate description of
+what the data supports. It's a suggestive, unconfirmed lead worth more
+seeds to resolve, reported as exactly that, not inflated into a
+second, independent argument for grouped splitting just because the
+second run's numbers looked clean on their own. This is the same
+discipline applied to itself: a hypothesis this project wanted to be true
+doesn't get a pass on the checking that every other claim here got.
 
 ## 10. Limitations
 

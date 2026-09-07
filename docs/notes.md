@@ -7,6 +7,121 @@ written from evidence rather than reconstructed from memory.
 
 - [ ] Session 1: scaffold created, ingest + split + A/B experiment.
 
+## Why curation costs AUROC: three hypotheses tested, the flattering one lost
+
+The original writeup offered one hypothesis for C's -0.0146 AUROC vs B:
+quality curation removed images that were hard-to-grade but not
+uninformative to a CNN. Plausible, and flattering to report without
+checking further (it makes curation sound sophisticated). Tested three
+alternatives in order of confidence instead of taking it on faith.
+
+**(a) Quality correlates with disease -- tested and refuted, in the
+opposite direction from the hypothesis.** If cataract/media opacity both
+cause haze and constitute pathology, rejects should skew abnormal.
+Checked directly: of the 43 rejects, 27 are normal (62.8%) and 16 abnormal
+(37.2%), against a dataset baseline of 45.0%/55.0% -- **rejects skew
+*normal*, not abnormal** (chi-square vs baseline: p=0.019, real
+difference, wrong direction for the hypothesis). Population-scale check,
+much stronger than 43 images can give: mean gradability score by label
+across the full 6392-image dataset is 0.8482 for normal, 0.8553 for
+abnormal -- abnormal images score very slightly *higher* quality on
+average (t-test p=0.0039, Mann-Whitney p=0.041; the effect is small,
+0.007, but real at this n). **This hypothesis does not hold.** Removing
+the 43 rejects shifts overall class balance from 44.96% normal to 44.85%
+-- negligible, and in a direction that doesn't explain a meaningful AUROC
+drop. Speculative, not established: one possible reason rejects skew
+normal here is that images collected as part of a confirmed-pathology
+workup may have received more careful capture than routine/screening
+normals, but this dataset doesn't have the metadata to test that, and no
+claim is made about fundus imaging in general from a finding this
+dataset-specific.
+
+**(b) Composition, not size -- tested and confirmed, much larger than
+expected.** Matched training-set *size* (4435 for both B and C) does not
+mean matched training-set *identity*. Checked directly: B's and C's
+actual training sets share only **3071 of 4435 images (69.2%)** -- 1364
+images (30.8%) are simply different, not because they were quality-
+rejected (only 43 were), but because `patient_group_split` is recomputed
+fresh via `StratifiedGroupKFold` on each arm's own curated pool, and that
+algorithm reassigns a large fraction of fold membership even from a small
+change to its input.
+
+**(c) Magnitude sanity check -- resolved by (b), and the "1%" framing was
+misleading.** Is a 0.0146 AUROC shift plausible from removing under 1% of
+the data? Wrong question: **the real perturbation is 30.8% of the
+training set, not 0.97%.** Confirmed with a control: removed 43 *random*
+images, uncorrelated with quality or content, from the same manifest, and
+recomputed the split the same way -- **69.4% overlap with B's original
+training set, statistically indistinguishable from the real 69.2%.**
+Any 43-image removal from this pool causes almost exactly this much
+reshuffling; the quality-relatedness of the actual 43 removed images is
+incidental to this specific mechanism, not the cause of it.
+
+**Revised leading explanation, replacing the original hypothesis**: the
+C-vs-B AUROC difference is best explained by `StratifiedGroupKFold`'s
+sensitivity to small perturbations in its input pool, not by curation
+removing informative content. Matching training-set *size* across arms
+(which this project does carefully) is not sufficient to isolate a
+curation effect when the split itself is recomputed per arm -- roughly
+a third of the training set differs between B and C regardless of *why*
+the pool changed. This is a real methodological finding about this
+project's own arm-comparison design, not just about ODIR-5K: a cleaner
+design for isolating curation's effect specifically would compute the
+split once on the full raw pool and then remove quality-rejected images
+from whichever fold they land in, rather than re-splitting the curated
+pool from scratch -- flagged here as a design lesson for future work, not
+implemented now (this is a report-only investigation, not a pipeline
+change). The original "informative-but-hard-to-grade" hypothesis isn't
+disproven outright -- it could still be a minor contributing factor
+layered on top of the reshuffling effect -- but it is no longer the
+leading account, and it should not have been reported as the sole
+explanation without this check.
+
+## Variance instability of the naive split -- investigated, did not replicate either
+
+Arm A's AUROC std in the second (4-arm) run is 0.0129 vs arm B's 0.0028
+-- a 4.6x ratio, and a real, mechanistically sensible second argument for
+grouped splitting (the naive split's score depends on which patients
+happened to straddle the fold boundary, so beyond being optimistic on
+average it could be less *stable* run to run). Checked against the first
+A/B-only run before promoting it, the same way the mean-difference finding
+was checked. **It does not hold up the same way across both runs:**
+
+| Run | Metric | std A | std B | Ratio (A/B) | Levene p |
+|---|---|---|---|---|---|
+| First (cap=4473) | AUROC | 0.0069 | 0.0083 | 0.83x | 0.729 |
+| First (cap=4473) | AUPRC | 0.0052 | 0.0060 | 0.86x | 0.711 |
+| First (cap=4473) | Sens@95 | 0.0262 | 0.0102 | 2.58x | 0.140 |
+| Second (cap=4435) | AUROC | 0.0129 | 0.0028 | 4.58x | 0.081 |
+| Second (cap=4435) | AUPRC | 0.0117 | 0.0032 | 3.59x | 0.142 |
+| Second (cap=4435) | Sens@95 | 0.0252 | 0.0176 | 1.43x | 0.540 |
+| Pooled (n=10/arm, informal) | AUROC | 0.0107 | 0.0059 | 1.82x | 0.084 |
+| Pooled (n=10/arm, informal) | AUPRC | 0.0090 | 0.0046 | 1.97x | 0.195 |
+| Pooled (n=10/arm, informal) | Sens@95 | 0.0249 | 0.0163 | 1.53x | 0.192 |
+
+In the first run, A was actually *less* variable than B on AUROC/AUPRC
+(ratio <1) -- the opposite of the hypothesized direction -- and only
+Sens@95%Spec showed A more variable (2.58x), the metric that shows the
+*weakest* version of the pattern in the second run (1.43x). No individual
+run's Levene test reaches p<0.05 for any metric; the informally pooled
+10-observations-per-arm estimate (ratio ~1.8-2x for AUROC/AUPRC) is
+directionally suggestive but still not significant (p=0.08-0.20) at this
+sample size, and pooling itself is a caveat-laden move since the two runs
+used slightly different training-set caps (4473 vs 4435), not identical
+conditions.
+
+**Honest verdict, stated as plainly as the finding it was checked
+against**: this does *not* clear the bar this project has held every
+other claim to. It is directionally present in the second run and in one
+metric of the first, but it does not replicate cleanly, exactly like the
+mean-difference finding it was hoped to reinforce. Reporting it as "a
+result that replicated when the headline didn't" would not be true to
+what checking it found -- so it isn't reported that way. It is reported as
+an investigated, suggestive, unconfirmed lead: worth more data (more
+seeds) to resolve, not worth a confident second argument for grouped
+splitting in the README's headline alongside the (also unconfirmed)
+mean-difference result.
+
 ## Arms C and D: full 4-arm run -- the prediction partly held, and A-vs-B didn't replicate
 
 Full dataset, 5 seeds (42-46), epochs=15, GPU, train size matched across

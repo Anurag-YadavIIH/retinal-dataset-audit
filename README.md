@@ -61,19 +61,72 @@ above — arms C and D were expected to be statistically indistinguishable
 from B. **That held for D.** It did **not** fully hold for C: AUROC is
 lower for C than B by a small amount (−0.0146), consistently across all
 5/5 seeds, surviving Bonferroni correction across the 6-comparison family
-— though only just (corrected CI upper bound −0.0002). A plausible,
-falsifiable explanation, not a proven one: matching training-set *size*
-across arms doesn't guarantee matching training-set *composition* —
-quality curation removes the specific lowest-scoring images, and some of
-those may have been informative to a CNN despite being hard to grade by a
-human-legible standard. Full comparison tables (C vs. B, D vs. B, same
-statistical rigor as A vs. B above) are in `docs/notes.md`.
+— though only just (corrected CI upper bound −0.0002).
+
+**Why, investigated rather than assumed — three hypotheses, tested in
+order of confidence, and the flattering one lost:**
+
+1. *Quality correlates with disease* (rejects are disproportionately
+   abnormal, so curation strips positive cases) — **tested and refuted,
+   in the opposite direction.** The 43 rejects are 62.8% normal against a
+   45.0% dataset baseline (rejects skew *normal*, not abnormal;
+   chi-square p=0.019), and across the full 6392-image dataset, abnormal
+   images score very slightly *higher* quality on average, not lower
+   (p=0.004). This hypothesis does not hold on this dataset.
+2. *Composition, not size* — **tested and confirmed, and much larger
+   than the raw removal count suggests.** B's and C's actual training
+   sets, both exactly 4435 images, share only **69.2%** of those images
+   — 1364 are simply different, because `patient_group_split` is
+   recomputed fresh on each arm's curated pool and `StratifiedGroupKFold`
+   reassigns a large fraction of fold membership from even a small
+   change to its input.
+3. *Magnitude sanity check* — **the "under 1%" framing was misleading.**
+   Removing 43 *random* images (uncorrelated with quality) from the same
+   pool and re-splitting produces 69.4% overlap with B's original
+   training set — statistically indistinguishable from the real 69.2%.
+   The actual perturbation this comparison measures is ~31% of the
+   training set, not the 0.97% the raw count implies, which is why an
+   effect this size is plausible at all.
+
+**Revised leading explanation**: the C-vs-B difference is best explained
+by `StratifiedGroupKFold`'s sensitivity to small input perturbations, not
+by curation removing informative content — matching training-set *size*
+across arms doesn't guarantee matching *identity* when the split is
+recomputed per arm. This is a finding about this project's own
+arm-comparison design as much as about ODIR-5K, and the original
+"informative-but-hard-to-grade-images" hypothesis — plausible, and the
+flattering account to have stopped at — does not survive the check.
+Full detail for all three hypotheses is in `docs/notes.md`.
 
 All arms use the same seed sequence, the same ResNet18 hyperparameters,
 and training-set size matched across all four arms (not just within a
 curation level) — the point being that if a curated arm's smaller natural
 pool went uncapped, any difference from B would measure dataset size, not
 curation.
+
+### Is the naive split unstable, not just optimistic? Investigated — inconclusive, reported that way
+
+A second, independent-sounding argument for grouped splitting: arm A's
+AUROC std in the second run is 0.0129 against arm B's 0.0028, a 4.6x
+ratio — if the naive split's score depends on which patients happened to
+straddle the fold boundary, it should be less *stable* across seeds, not
+just optimistic on average. Checked against the first A/B run before
+reporting it as a second confirmed finding, the same way the mean
+difference was checked — **it does not hold up the same way in both
+runs.** In the first run, A was actually *less* variable than B on AUROC
+(0.0069 vs 0.0083) and AUPRC — the opposite direction — and only
+sensitivity at 95% specificity showed A more variable (2.58x), which is
+the metric showing the *weakest* version of the pattern in the second run
+(1.43x). No single run's variance difference reaches conventional
+significance (Levene's test, smallest p=0.081); an informal pooled
+estimate across both runs (ratio ~1.8–2x for AUROC/AUPRC) is directionally
+suggestive but still not significant (p=0.08–0.20) at this sample size.
+
+**Reported honestly rather than promoted**: this does not clear the same
+bar every other claim in this project has been held to. It's a suggestive,
+unconfirmed lead — worth more seeds to resolve — not a second, independent,
+replicated argument for grouped splitting alongside the (also unconfirmed)
+mean-difference result. Full numbers for both runs are in `docs/notes.md`.
 
 ### Why the effect is smaller than the overlap suggests
 
