@@ -7,6 +7,74 @@ written from evidence rather than reconstructed from memory.
 
 - [ ] Session 1: scaffold created, ingest + split + A/B experiment.
 
+## dedupe.py: phash verified properly this time, embedding threshold was also wrong
+
+Implemented per CLAUDE.md step 6: phash candidates + pretrained-ResNet18
+embedding candidates, both against the real 6392-image dataset.
+
+**phash, done right:** the earlier ad hoc investigation (see the label/
+dedupe finding above) only pixel-diff-verified the strictest hamming==0
+bucket (14 candidates, found 2 genuine pairs). The real module verifies
+*every* phash candidate at the configured hamming<=6 (13733 of them) by
+actual pixel difference, not just the tightest bucket -- and found **8
+genuine pairs**, not 2. Two additional real duplicate pairs (398 vs 668,
+3297 vs 4542) were sitting at hamming 1-6, missed by only checking
+hamming==0. Lesson: verify every candidate, not just the ones under the
+strictest sub-threshold.
+
+**embedding_cosine_min: 0.98 (the config default) was also wrong, caught
+before trusting the output.** First run at 0.98 produced 165 candidate
+pairs, and the audit logged nearly all of them as "cross-patient integrity
+issues" -- a volume as suspicious as the earlier FOV-clipping numbers, so
+checked before believing it. Pixel-difference verification (the tool that
+worked for phash) doesn't apply here: embeddings are explicitly meant to
+catch pixel-*different* content (same eye, different lighting), so a
+tight pixel-diff gate would reject genuine embedding finds. Verified by
+eye instead: `28_right.jpg` vs `32_right.jpg` (sim 0.98, pixel-diff 12.4)
+-- plausibly genuine, nearly identical vessel branching, different
+color/exposure. `180_right.jpg` vs `394_right.jpg` (sim 0.98, pixel-diff
+8.9) -- clearly two different patients, different vessel topology
+entirely. At 0.98 the threshold also caught 4 genuine fellow-eye pairs
+(patients 1032, 2110, 2217, 2219) as false "duplicates" -- exactly the
+failure mode flagged as a risk in advance. Checked cosine_min against
+fellow-eye false positives and candidate count directly: 0.98 -> 165
+pairs/4 fellow-eye FPs, 0.99 -> 10 pairs/0 FPs, 0.995 -> 5, 0.998 -> 4.
+**Raised to 0.99**: eliminates every fellow-eye false positive, and all 10
+remaining candidates have low pixel-diff (0.00-7.74) with the 3 not
+already found by phash (`31_left` vs `105_left`, `1109_right` vs
+`1166_right`, `4330_left` vs `4552_left`) visually confirmed -- the first
+two are unmistakably the same eye (near-identical vessel branching), not
+a plausible call.
+
+**Final result**, phash-verified (8 pairs) + embedding at the corrected
+0.99 threshold (10 pairs, 6 overlapping with phash): **11 distinct
+duplicate clusters, 22 images, across 8 unique patient-pairs** (3 pairs
+duplicated on both eyes, 5 on one eye). None are same-patient/fellow-eye;
+all are cross-patient -- the same real capture filed under two different
+declared patient IDs.
+
+**Money metric**: of these 18 verified pairs (8+10, double-counting the 6
+found by both methods -- the 11-cluster/22-image figure above is the
+deduplicated count), **4 straddle the `image_random` split's fold
+boundaries; 3 straddle `patient_group`'s.** Materially the same order of
+magnitude for both -- confirms directly what the design argument already
+predicted: patient-grouped splitting has no mechanism to catch a
+duplicate filed under two *different* patient IDs, since it only keeps a
+single declared ID's images together. This class of leakage is dedupe's
+job specifically, not splitting's.
+
+**Prediction, stated before running arms C and D**: quality curation
+removes 43 images (0.7%) and deduplication removes at most 22 (0.3%, and
+only from whichever side of each pair curation decides to drop). Neither
+change is large enough to plausibly move an AUROC measured with a paired
+seed-to-seed noise floor of ~0.05 (the A/B result above). **Arms C and D
+are expected to be statistically indistinguishable from arm B.** If they
+come out otherwise, that is the surprising result requiring explanation,
+not the expected one -- these stages earn their place in the pipeline by
+being the right thing to do and by catching the genuine duplicate-ID
+integrity problem above, not by moving a metric on a dataset that turned
+out to already be this clean.
+
 ## quality.py sanity checks: false rejects, uniform haze, raw-vs-preprocessed
 
 Three checks requested after the 0.7% reject rate landed, to make sure that

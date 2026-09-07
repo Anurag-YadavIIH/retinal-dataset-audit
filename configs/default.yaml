@@ -44,8 +44,20 @@ quality:
   reject_below_score: 0.5
 
 dedupe:
+  # phash candidates are always pixel-difference verified before being
+  # trusted (dedupe.py), so this can stay loose -- it only sets the
+  # candidate pool, not the final decision. Checked directly: hamming<=6
+  # flagged 13733 candidates on the real 6392-image dataset, of which only
+  # 8 verified as genuine after pixel-diff (docs/notes.md).
   phash_hamming_max: 6
-  embedding_cosine_min: 0.98
+  # Raised from 0.98 after checking directly: at 0.98 this ImageNet-pretrained
+  # (not fundus-fine-tuned) ResNet18 caught 4 genuine fellow-eye pairs as
+  # false "duplicates" and produced 165 candidates, most visually confirmed
+  # as different patients with only superficially similar composition. At
+  # 0.99: 0 fellow-eye false positives, 10 candidates, all confirmed by low
+  # pixel-difference and (for the 3 not already found by phash) direct visual
+  # inspection -- unmistakably the same eye. See docs/notes.md.
+  embedding_cosine_min: 0.99
   embedding_model: resnet18
 
 split:
