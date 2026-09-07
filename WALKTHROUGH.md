@@ -1,76 +1,519 @@
 # Walkthrough
 
 > Written for a reader who has to defend this project in a technical interview.
-> Claude Code fills each section as the corresponding module is built.
 > **Read this file before reading the code.**
 
 ## 1. The claim
 
-*What is this project asserting, in one paragraph, and what evidence supports it?*
+Splitting a fundus dataset by image instead of by patient inflates measured
+model performance, because bilateral disease correlation and repeat-visit
+recapture mean the "unseen" test set is not actually unseen. This project
+measures that inflation directly rather than asserting it: the same ResNet18,
+the same hyperparameters, the same training-set size, trained once on an
+image-random split (arm A) and once on a patient-grouped split (arm B),
+5 seeds each, on the real ODIR-5K dataset (6392 images, 3358 patients).
+
+The exact-count evidence needs no statistics: **42.3% of patients (1422/3358)
+land on both sides of the image-random split's folds.** Patient-grouped
+splitting eliminates this outright — 0 patients cross a fold boundary, by
+construction, every time.
+
+The downstream cost is real but modest and reported honestly, not inflated:
+a paired mean AUROC gap of 0.0173 (image-random scoring higher), consistent
+in direction across all 5/5 seeds, with an uncorrected 95% CI excluding
+zero but **not** surviving Bonferroni correction across the three metrics
+tested at n=5 seeds. The full statistical account — including two rounds of
+self-correction where an earlier draft of this analysis overstated the
+evidence — is in `docs/notes.md`. That process is part of the claim: a
+project whose central number survived being checked twice, and changed as a
+result, is more trustworthy than one that got the "right" answer on the
+first pass and stopped looking.
+
+Investigating *why* the effect is smaller than 42.3% overlap would suggest
+turned out to be the most informative part of the project: fellow eyes
+share the same binary label only 77.8% of the time (vs. a 50.5% chance
+floor at this dataset's class balance) — leaking a patient's identity does
+not mean leaking their label, it means leaking a noisy ~78%-reliable hint
+about it. See §5.
 
 ## 2. Dataset and label derivation
 
-*Why ODIR-5K. How patient-level labels were mapped onto individual eyes, and
-what that mapping costs.*
+**Why ODIR-5K**: it is organised by patient with a left and right fundus
+image per patient, which is exactly the structure that makes patient-level
+leakage measurable and quantifiable rather than theoretical. Most public
+fundus datasets (e.g. single-image classification sets like APTOS) don't
+have this bilateral structure, so the leakage question can't even be posed
+the same way.
+
+**A real assumption failure, corrected against the actual data**: the
+adapter was first written assuming `full_df.csv` was *wide* (one row per
+patient, `Left-Fundus`/`Right-Fundus` columns). The real file is *long*
+(one row per eye — confirmed: 6392 rows, 3358 unique IDs, 6392 unique
+filenames). The wide-format code would have silently melted every row into
+two, doubling the dataset without erroring. Caught by checking the actual
+downloaded file's shape before trusting the adapter, not by an error at
+runtime — nothing in a wide-format melt of a long-format file would have
+raised an exception, it would have just quietly produced a wrong but
+plausible-looking manifest. `eye` is derived from the filename's own
+`_left`/`_right` suffix (asserted, fails loudly on any filename that
+doesn't match), not from the `Left-Fundus`/`Right-Fundus` columns, because
+those columns are populated for both sides even when only one side's
+image/row actually exists — a real quirk of the source data (324/3358
+patients, 9.6%, have only one usable eye).
+
+**Label derivation — investigated, not assumed, and it mattered**: ODIR
+ships two candidate label sources. `normal_column` (the patient-level `N`
+one-hot flag) forces both eyes of a patient to the same label. `keywords`
+parses the per-eye diagnostic keyword string. The two disagree on 12.1% of
+rows. Rather than picking one by convention, checked which is better
+supported: `keywords` agrees with the (also per-eye) `target` column on
+100.0% of all 6392 rows, and of the 675 patients where `target` differs
+across eyes, `keywords` also differs for 674 of them (99.9%) — two
+independently-authored eye-level signals agreeing this precisely is strong
+evidence both are measuring real per-eye ground truth. Eyeballing 10
+sampled disagreements confirmed the mechanism: `normal_column` mislabels
+the healthy fellow-eye of a unilaterally-diseased patient as abnormal,
+every time, because it can only see the patient-level flag. Switched the
+project default to `keywords`; `normal_column` stays implemented as an
+explicit comparison. **This label-source choice is itself a data-curation
+decision with a measurable effect on the headline numbers** (32.9% vs.
+45.0% normal), before curation or splitting are even in play.
 
 ## 3. Manifest design
 
-*Why a single canonical schema, and why patient_id is the load-bearing column.*
+One canonical schema (`image_path`, `patient_id`, `eye`, `age`, `sex`,
+`label`, `dataset_name`) that every adapter must produce, so adding a
+second dataset means writing one function, not touching split/train/
+experiment code. `patient_id` is the load-bearing column: it is the only
+thing that determines whether a naive split leaks, so `validate_manifest`
+enforces it's a non-null string on every row and every referenced
+`image_path` actually exists on disk — failing loudly with every offending
+row named, not silently dropping bad rows. Adapter code separately never
+assumes exactly two rows per patient (single-eye patients are 9.6% of the
+data); a hardcoded `2 *` assumption was caught and removed from an early
+version of the test suite specifically because it would have silently
+passed on data where it happened to be true and failed confusingly later.
 
 ## 4. Splitting
 
-*image_random vs patient_group. Why StratifiedGroupKFold. Why perfect
-stratification is impossible under a group constraint.*
+`image_random_split` (wrong, on purpose) is an ordinary stratified
+`train_test_split` over individual images, blind to `patient_id`.
+`patient_group_split` (right) uses `StratifiedGroupKFold`, holding out one
+fold as test, then splitting the remainder again for val — so a patient's
+images are guaranteed to land in exactly one fold. Perfect
+stratification is impossible under a group constraint (you can't
+simultaneously balance class *and* keep every group whole when group sizes
+vary), so the achieved class balance per fold is logged and reported, not
+assumed to hit the configured fraction exactly — on the real data it lands
+within about half a percentage point in practice, close enough not to
+matter, but that's an empirical finding, not a guarantee the code makes.
+
+`patient_overlap` is the direct, assertable proof: it counts how many
+patient IDs appear in more than one fold. On the real full dataset:
+**0 for `patient_group`, 1422/3358 (42.3%) for `image_random`.** Every
+`patient_group_split` result in this codebase is checked against this
+function before being trusted for anything downstream.
 
 ## 5. Why leakage is worse in retinal imaging than elsewhere
 
-*Bilateral disease correlation. Two eyes per patient. Repeat visits and
-same-session recaptures. Compare against a domain where this is milder.*
+Four compounding reasons, in decreasing order of how much this project can
+actually quantify each one:
+
+1. **Bilateral disease correlation.** Most systemic and many ocular
+   conditions affect both eyes together (diabetic retinopathy, glaucoma,
+   hypertensive changes). If a model has seen the left eye's presentation,
+   it has seen strong evidence about the right eye's — not because it
+   learned anything general, but because the two eyes are correlated by
+   the same underlying disease process. **Measured directly on this
+   dataset: fellow eyes share the same binary label 77.8% of the time,
+   against a 50.5% chance floor given the class balance.** That 27.3
+   percentage-point excess over chance is the quantitative size of this
+   effect here.
+2. **Two eyes, one patient ID.** This is what makes the leak mechanical
+   and unavoidable under a naive split: a random shuffle of *images*
+   doesn't know "these two rows are the same person," so it puts them on
+   opposite sides of the boundary constantly (42.3% of patients, measured).
+   A domain with one image per subject (e.g. many chest X-ray sets, one
+   film per patient per visit) doesn't have this specific failure mode at
+   all — leakage there comes from other sources (repeat visits, near-
+   duplicate scans), not from an *inherent* two-samples-per-subject
+   structure.
+3. **Repeat visits and same-session recaptures.** A clinic re-photographs
+   a bad capture, or the same patient returns for a follow-up. This
+   project found a concrete instance of the *adjacent* problem — the same
+   underlying photograph filed under two **different** patient IDs (2
+   confirmed pairs, pixel-verified) — which patient-grouped splitting
+   cannot catch, because it only groups by *declared* patient ID, and
+   these are declared differently. Only deduplication closes that gap;
+   splitting strategy and deduplication defend against genuinely different
+   failure modes, not the same one twice.
+4. **Task coarseness compounds all of the above.** Binary normal/abnormal
+   collapses 8 original ODIR categories into one "abnormal" bucket, so two
+   *different*, unrelated diseases in the two eyes both count as
+   "abnormal" and therefore "concordant" here — likely *understating* true
+   bilateral consistency relative to a per-disease task, where the same
+   specific disease in both eyes would show even higher concordance. Not
+   measured directly in this project (a multi-class or per-disease
+   experiment was assessed as plausible but not run), but it's the
+   direction any coarseness correction would point.
+
+A domain where this is milder: single-image-per-subject datasets with no
+bilateral structure and infrequent recapture (e.g. many single-photograph
+dermatology sets) — the *image*-vs-*patient* distinction that dominates
+this project's whole design collapses to "one row per subject," so a naive
+random split is simply correct there, not merely less wrong.
 
 ## 6. Quality scoring
 
-*Each metric, why it was chosen, its failure modes. Why the score is a
-transparent weighted sum rather than a learned one. The resolution-dependence
-of variance-of-Laplacian across mixed camera models.*
+Four classical CV metrics (variance of Laplacian + Tenengrad for blur,
+FOV-interior exposure stats, per-quadrant illumination CV), combined into a
+transparent weighted sum (`gradability_score`), not a learned model — "why
+was this image rejected" needs to be a one-sentence, inspectable answer,
+which a hand-weighted sum gives for free and a learned classifier doesn't.
+
+**Two documented traps, both real and both caught before trusting a
+number, not just avoided in the abstract:**
+
+- *Resolution dependence.* `variance_of_laplacian` is naturally larger for
+  higher-resolution images regardless of true focus, so blur metrics must
+  run on a fixed resize, not raw resolution. Checked directly rather than
+  assumed moot: this project's own `preprocessed_images/` is uniformly
+  512×512 (200-image sample, zero exceptions), so the trap is inert for
+  what's actually scored here — but the raw `Training Images/` mixes 12+
+  distinct resolutions in the first 50 files alone, so the fixed-resize
+  step stays unconditional in the code, correct for that folder and any
+  future dataset even though it's a no-op today.
+- *FOV-interior exposure.* Computing exposure over the whole frame makes
+  every image look underexposed, since the black background outside the
+  circular retinal field dwarfs the actual content in pixel count.
+  `exposure_metrics` takes the detected FOV mask explicitly and restricts
+  every statistic to it.
+
+**A threshold bug that would have rejected half the dataset, caught before
+reporting the number**: the first FOV-validity check compared a *fitted
+enclosing circle's* geometric extent against the frame. Since this
+dataset's FOV is pre-cropped to fill the frame almost exactly (median
+radius fraction 0.998), ordinary off-centre circle-fitting noise on a real
+photograph triggered "clipped" on the majority of completely normal
+images — 51.1% reject rate on the first run. Diagnosed rather than
+reported: switched to checking whether the *thresholded contour itself*
+touches the border (38.5%, still wrong) then to a contour-area/circle-area
+circularity ratio, and found by direct visual inspection at several
+threshold values that circularity conflates three different things on
+this dataset — real truncation, complete-but-*oval*-shaped crops (a
+legitimate, common variant here, not a defect), and hazy/low-contrast
+images with a ragged threshold boundary. **Fix: `fov_clipped` is computed
+and stored for visibility but no longer gates rejection**; only the
+FOV-radius-fraction check (a real, uncontroversial "is the field too
+small" signal) does. Final reject rate: **43/6392 = 0.7%**, verified
+sane three ways — a contact sheet of the 20 lowest/20 highest scoring
+images shows a clean visual gradient; all 43 rejects inspected by eye show
+genuine degradation with no clear false rejects (some near-boundary cases
+are honestly ambiguous, which is expected at any hard cutoff, not a bug);
+and a 400-image sample of the *raw*, not-yet-curated `Training Images/`
+scored with the identical code and thresholds rejects 4.2% — a 6x
+relative difference confirming the low number reflects that this dataset
+was already curated upstream, not that the module is lax.
+
+**A known, unfixed limitation, stated plainly rather than left implied**:
+uniform haze (e.g. dense cataract, severe media opacity) is not reliably
+caught. Two essentially featureless, uniformly hazy images score 0.943 and
+0.979 — near the top of the entire dataset. `illumination_uniformity`
+measures *unevenness*, and uniform haze is by definition even, so it reads
+as good; blur metrics stay above threshold because moderate haze doesn't
+eliminate all high-frequency content (compression artifacts, faint
+reflections still register). Classical per-pixel/per-quadrant statistics
+of the kind used here structurally cannot distinguish "uniformly hazy"
+from "uniformly clear" — a real deployment would need an added
+contrast/entropy-style check or a learned gradability classifier
+specifically for this failure mode.
 
 ## 7. Deduplication
 
-*Why phash and embeddings catch different things. Threshold selection and how
-it was validated.*
+Two methods, deliberately catching different things: `phash` (64-bit
+perceptual hash) catches near-identical pixels — crops, rescales,
+recompression. `embedding_duplicates` (pretrained ResNet18 penultimate
+features, cosine similarity) catches the same eye photographed twice under
+different lighting or exposure, where the raw pixels differ substantially
+but the content doesn't.
+
+**Threshold validation, done honestly, twice over, in the same module**:
+
+- *phash*: the configured default (`hamming<=6`) flags 13733 candidate
+  pairs on the real 6392-image dataset. Visually inspected several — the
+  overwhelming majority are false positives, because fundus photography
+  shares enough generic macro-structure (dark background, circular field,
+  similar framing) that a coarse hash collapses unrelated images together.
+  **Fix: every phash candidate is verified by actual pixel difference
+  before being trusted**, not just the strictest hamming==0 bucket an
+  earlier ad hoc pass checked (which found only 2 genuine pairs) — full
+  verification of all 13733 candidates found **8** genuine pairs, because
+  2 real duplicates sat at hamming distance 1-6 and would have been missed
+  by only trusting the tightest bucket.
+- *embeddings*: the configured default (`cosine>=0.98`) produced 165
+  candidates on the first real run, almost all logged as cross-patient
+  matches — a volume as suspicious as the phash false-positive rate, so
+  checked before trusting it. Pixel-difference verification doesn't apply
+  here (embeddings are explicitly meant to catch pixel-*different*
+  content), so verified by eye instead, and found the threshold **also**
+  caught 4 genuine fellow-eye pairs as false "duplicates" — exactly the
+  risk flagged as worth checking in advance. Raised to `cosine>=0.99`:
+  zero fellow-eye false positives, 10 candidates, all confirmed by low
+  pixel-difference and (for the 3 not already found by phash) direct
+  visual inspection — unmistakably the same eye in each case.
+
+**Final, real dataset-integrity finding**: 11 distinct duplicate clusters,
+22 images, across 8 unique cross-patient pairs — the same underlying
+capture filed under two *different* patient IDs, confirmed by near-zero
+pixel difference on every pair. **The money metric**: of the 18 verified
+pairs (8 phash + 10 embedding, 6 found by both), 4 straddle the
+`image_random` split's folds and 3 straddle `patient_group`'s — materially
+the same order of magnitude for both, which is the point: patient-grouped
+splitting has no mechanism to catch a duplicate filed under two different
+patient IDs, since it only keeps a single declared ID's images together.
+This class of leakage is deduplication's job specifically, not
+splitting's — the two stages defend against genuinely different failure
+modes.
 
 ## 8. Model and metrics
 
-*Why ResNet18 and nothing fancier. Why AUROC alone is not enough on an
-imbalanced set, and what sensitivity at 95% specificity means clinically.*
+ResNet18, pretrained, new 2-class head, CrossEntropyLoss, Adam — the
+project's own thesis is that the data path is the contribution, so the
+model is kept deliberately boring and identical across every arm; a
+fancier architecture would only add a second, uncontrolled variable to a
+comparison whose entire value is having exactly one.
+
+**Why not accuracy**: at this dataset's ~45%/55% class balance, accuracy
+is not badly imbalanced-sensitive here, but AUROC/AUPRC still say more —
+they're threshold-independent, so they're not sensitive to *where* the
+model happens to put its decision boundary, only to whether it ranks
+positives above negatives correctly. **Sensitivity at 95% specificity is
+the clinically meaningful addition**: a screening tool's real operating
+point is chosen to keep the false-positive (unnecessary referral) rate at
+a level clinics can absorb, then sensitivity at that fixed point is what
+determines how many real disease cases get missed. AUROC alone can be
+identical between two models with very different sensitivity at the
+specific operating point that would actually be deployed.
+
+No horizontal flip in augmentation, only small rotation — a flip turns a
+left eye into an (anatomically wrong) right eye, and disc position
+relative to the macula is a real anatomical cue a model can legitimately
+learn from; flipping silently corrupts that cue and is a
+leakage-adjacent trick (it would let the model exploit fellow-eye mirror
+symmetry in a way that doesn't correspond to real generalisation).
 
 ## 9. Experiment design
 
-*Why arm sizes are matched. What is and is not controlled. What would confound
-the result.*
+Same seed pattern (`[cfg.seed, cfg.seed+1, ..., cfg.seed+n_seeds-1]`),
+same hyperparameters, and — the part that mattered most in practice —
+**training-set size matched across every arm being compared, computed
+fresh from all four arms' actual curated pools, not assumed**. Curation
+removes images (quality: 43/6392, 0.7%; quality+dedupe: an additional 11
+images/6349, 0.2%), so C and D's natural pools are smaller than A/B's raw
+one; capping only within "raw" arms while leaving curated arms uncapped
+would let a curated arm's smaller pool masquerade as a curation effect
+when it's actually just a dataset-size effect. Natural train sizes on the
+real data: A=4473, B=4474, C=4443, D=4435 — cap=4435, so even A/B (which
+needed no curation) lose a fraction of a percent to match. Small in this
+case, but the mechanism is what matters, not the magnitude: **if arm C had
+beaten arm B without this cap, the honest reading would be "C had less
+data variance from a smaller, easier subset," not "curation helped."**
+
+What is controlled: model, hyperparameters, seed sequence, train-set size,
+split strategy (patient_group for B/C/D). What is *not* controlled and
+would confound the result if ignored: image resolution/preprocessing
+pipeline differences between real deployment data and this benchmark
+(everything here comes from one already-curated Kaggle release); the
+specific quality/dedupe thresholds, which were investigated and corrected
+during this project but are not claimed to be optimal, only evidence-based
+and stated as such.
+
+**Prediction, stated in `docs/notes.md` before arms C and D were run, not
+after**: quality curation removes 43 images (0.7%) and deduplication
+removes at most 22 (0.3%, and only from whichever side of each pair
+curation decides to drop). Neither is large enough to plausibly move an
+AUROC measured against a paired seed-to-seed noise floor of ~0.05 (the A/B
+result). **Arms C and D were predicted to be statistically
+indistinguishable from arm B.**
+
+**Result**: `[[FILL IN AFTER THE 4-ARM RUN COMPLETES — see artifacts/results_table.md
+and docs/notes.md for the full arm C/D numbers, paired comparison against B,
+and whether the prediction held.]]`
 
 ## 10. Limitations
 
-*Single dataset. Binary task. Patient-level labels. No external validation set.
-State these plainly — an interviewer will find them anyway, and finding them
-first is the better position.*
+Stated plainly, because an interviewer will find these anyway and finding
+them first is the better position:
+
+- **Single dataset.** Everything here is ODIR-5K. No external validation
+  set, no cross-dataset generalisation claim. A leakage effect measured on
+  one dataset's specific camera mix, label noise, and patient demographics
+  may not transfer in magnitude to another.
+- **Binary task.** Normal/abnormal collapses 8 original categories.
+  Assessed (not measured) to likely *understate* true bilateral-leakage
+  sensitivity relative to a per-disease task — see §5.
+- **Patient-level labels for the `normal_column` comparison arm.** Kept
+  deliberately as a documented worse alternative, not removed, because the
+  investigation that rejected it in favour of `keywords` is itself part of
+  the project's evidence, not just its conclusion.
+- **n=5 seeds is underpowered for precise effect-size claims**, openly
+  quantified rather than glossed: the Bonferroni-adjusted confidence
+  intervals for AUROC/AUPRC include zero, and detecting the observed
+  Sens@95%Spec effect at 80% power would need ~31 seeds. Confidence
+  intervals are reported specifically because they say what a bare p-value
+  can't — the range of true effects the data are actually consistent with.
+- **Quality and dedupe thresholds are evidence-based on this project's own
+  investigation, not externally validated against ground-truth gradability
+  or duplication labels** (none exist for this dataset). The uniform-haze
+  blind spot in quality scoring (§6) is a concrete, known instance of this
+  limitation, not a hypothetical one.
+- **No held-out camera/site split.** Class balance and quality scores were
+  not stratified by acquisition source; a camera or site confound (if one
+  exists in ODIR-5K) is not ruled out by anything in this project.
 
 ---
 
 ## Interview questions
 
-*12 likely questions with model answers. Claude Code drafts these; rewrite them
-in your own words before the interview, because an answer you cannot rephrase
-is an answer you do not have.*
+1. **Why does patient-level splitting matter more here than in, say, chest
+   X-ray classification?**
+   Because retinal imaging has a mechanical two-samples-per-subject
+   structure (left/right eye) plus real bilateral disease correlation, so
+   a naive split doesn't just risk leaking *a* correlated sample — it
+   leaks one specifically 42.3% of the time by construction (measured on
+   this dataset), and that leaked sample shares the true label 77.8% of
+   the time (vs. 50.5% by chance). Many chest X-ray datasets have one film
+   per patient per encounter, so the *image*-vs-*patient* distinction that
+   drives this whole project collapses for them — their leakage risk comes
+   from other sources (repeat visits, near-duplicate captures), not from
+   this specific structural doubling.
 
-1. Why does patient-level splitting matter more here than in, say, chest X-ray classification?
-2. Your gradability score is hand-weighted. Why not learn it?
-3. How would you validate the quality thresholds without ground-truth quality labels?
-4. What breaks if the same patient appears under two different IDs?
-5. How would this pipeline change for a real hospital PACS instead of a Kaggle zip?
-6. Horizontal flip augmentation on fundus images — safe or not, and why?
-7. Your labels are patient-level but your rows are eye-level. What does that do to the metrics?
-8. How would you detect a camera or site confound?
-9. What would you do differently if the downstream task were segmentation rather than classification?
-10. Sensitivity at 95% specificity — why that operating point?
-11. If the A-vs-B gap had come out near zero, what would you conclude?
-12. What is the single weakest part of this project?
+2. **Your gradability score is hand-weighted. Why not learn it?**
+   Two reasons. First, there's no ground-truth gradability label for this
+   dataset to learn *against* — any learned score would be trained on a
+   proxy (e.g. downstream model performance, or a small hand-labelled
+   subset) that introduces its own validation problem, one level removed.
+   Second, "why was this image rejected" needs to be a one-sentence,
+   inspectable answer for this project's purpose (auditing a pipeline,
+   not maximising a metric) — a transparent weighted sum gives that for
+   free; a learned classifier is a second black box on top of the model
+   this project is already trying to keep honest about.
+
+3. **How would you validate the quality thresholds without ground-truth
+   quality labels?**
+   Exactly what this project did: score everything, then look at the
+   distribution's extremes by eye (a contact sheet of the lowest- and
+   highest-scoring images) and check the direction is sane; inspect every
+   actual reject individually rather than trusting the aggregate reject
+   rate; and get an independent comparison population — scoring the raw,
+   not-yet-curated `Training Images/` with the identical code and
+   thresholds gave 4.2% vs. 0.7% on the curated set, a real, externally-
+   anchored contrast rather than a number checked only against itself.
+
+4. **What breaks if the same patient appears under two different IDs?**
+   Patient-grouped splitting breaks silently — it groups by *declared*
+   patient ID, so two different IDs that are actually the same person's
+   capture are treated as unrelated, and one copy can land in train while
+   the other lands in test with zero warning. This project found exactly
+   this: 2 genuine cross-patient duplicate pairs (pixel-verified), which
+   `patient_group_split` has no way to catch — only content-based
+   deduplication does. It's the concrete argument in this codebase for why
+   the pipeline needs both a grouped split *and* a dedupe stage, not just
+   one.
+
+5. **How would this pipeline change for a real hospital PACS instead of a
+   Kaggle zip?**
+   The adapter layer is exactly the seam designed for this — a new adapter
+   function producing the same canonical manifest, nothing else in
+   ingest/split/quality/dedupe/train changes. In practice: patient IDs
+   would come from an MRN or similar (already assumed to be trustworthy
+   here, which the duplicate-ID finding shows is not automatically safe
+   even in a *curated* public release, let alone a live system without an
+   equivalent audit); images would need DICOM handling and PHI stripping
+   (explicitly called out as unbuilt in the README's roadmap); and the raw
+   `Training Images/` reject-rate comparison in §6 is a preview of what a
+   less-curated real intake stream would look like against these same
+   thresholds.
+
+6. **Horizontal flip augmentation on fundus images — safe or not, and
+   why?**
+   Not safe, and not used here. A flip turns a left eye into an
+   anatomically wrong right eye — optic disc position relative to the
+   macula is a real, learnable anatomical cue (nasal vs. temporal), and
+   flipping destroys that relationship rather than teaching genuine
+   rotational invariance. It's also leakage-adjacent: flipping could let a
+   model exploit fellow-eye mirror symmetry as a shortcut, which isn't the
+   kind of generalisation the eventual metric should be crediting.
+
+7. **Your labels are patient-level but your rows are eye-level. What does
+   that do to the metrics?**
+   This is exactly the question the label-strategy investigation in §2
+   answered empirically rather than by assumption: under `normal_column`
+   (patient-level), a unilaterally-diseased patient's healthy fellow eye
+   gets mislabelled abnormal, every time — confirmed by eyeballing 10
+   sampled disagreements, all the same failure mode. That's a real,
+   measurable label-noise cost (12.1% of rows disagree between the two
+   candidate label sources), not a hypothetical one, and it's why the
+   project default switched to the per-eye `keywords` label instead.
+
+8. **How would you detect a camera or site confound?**
+   Not built here (see Limitations), but the method already used
+   elsewhere in this project generalises directly: stratify the quality
+   score distribution or the model's error rate by whatever proxy for
+   camera/site is available (image resolution before preprocessing,
+   metadata fields if present) and check whether either shifts
+   meaningfully between groups, the same way class balance was checked
+   before/after curation and reject rate was checked raw-vs-preprocessed.
+   A resolution-based proxy is plausible here specifically because the raw
+   `Training Images/` already showed 12+ distinct resolutions, which is
+   circumstantial evidence of a real camera mix worth stratifying by.
+
+9. **What would you do differently if the downstream task were
+   segmentation rather than classification?**
+   The leakage argument is unchanged (a segmentation model can memorise a
+   leaked fellow-eye's mask-relevant structure exactly the way a
+   classifier memorises its label), so the split/dedupe machinery carries
+   over directly. What changes: the metrics (Dice/IoU instead of
+   AUROC/AUPRC/Sens@Spec), the quality gate (a segmentation task cares
+   about boundary sharpness in specific anatomical regions more than
+   global gradability), and critically, the label pipeline — this project
+   sidestepped by using an existing per-eye label; a segmentation project
+   would need mask-level QC (empty masks, area outliers, annotator
+   agreement) as its own curation stage, which is exactly the kind of
+   thing flagged as future work in the README roadmap (REFUGE/IDRiD
+   segmentation, inter-grader agreement via DRIVE).
+
+10. **Sensitivity at 95% specificity — why that operating point?**
+    Because a screening tool's real deployment constraint is usually
+    expressed as an acceptable false-positive (unnecessary-referral) rate,
+    not an abstract threshold-independent ranking quality — 95% specificity
+    is a conventional, clinically legible choice for that constraint in
+    ophthalmic screening contexts. Reporting sensitivity *at* that fixed
+    point, rather than AUROC alone, answers the question a clinician
+    actually has: "at the false-positive rate my clinic can absorb, how
+    many real cases does this model miss?"
+
+11. **If the A-vs-B gap had come out near zero, what would you conclude?**
+    That the *overlap* is still real and exact (42.3% of patients,
+    unconditionally true regardless of any downstream model result) but
+    that *this particular* model/task/dataset combination wasn't sensitive
+    enough to exploit it detectably at this scale — and I'd say so plainly
+    rather than either burying a null result or reaching for a smaller
+    threshold/different metric until something looked significant. This
+    project already practices exactly that stance on the curation arms:
+    C and D were predicted in writing, before running them, to be
+    statistically indistinguishable from B, because 43+22 removed images
+    out of 6392 can't plausibly move a metric with a ~0.05 seed-noise
+    floor — a well-explained null is treated as a legitimate finding here,
+    not a failure to report around.
+
+12. **What is the single weakest part of this project?**
+    n=5 seeds. Every other number in this project — the 42.3% overlap, the
+    77.8% concordance, the 8 verified duplicate pairs, the 0.7% reject
+    rate — is either an exact count or independently cross-checked by eye.
+    The one number that matters most for the headline claim (the A-vs-B
+    AUROC gap) is the one resting on the thinnest statistical foundation:
+    the Bonferroni-corrected confidence intervals include zero, and this
+    project says so directly rather than hiding behind an uncorrected
+    p-value. More seeds is the honest fix, not a smaller correction or a
+    friendlier test.
