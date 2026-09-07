@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # torch/torchvision are excluded on purpose: only train.py and
+      # dedupe.py's embedding path need them (both import it lazily), and
+      # the test suite runs entirely against synthetic fixtures that never
+      # exercise those paths -- no dataset, no GPU, no 2GB+ download here.
+      # Mirrors scripts/setup_env.ps1's base-environment step.
+      - name: Install dependencies (no torch/torchvision)
+        run: |
+          grep -Ev '^\s*(torch|torchvision)\s*[><=]' requirements.txt > /tmp/requirements-ci.txt
+          pip install -r /tmp/requirements-ci.txt
+          pip install -e . --no-deps
+
+      - name: ruff
+        run: ruff check .
+
+      - name: pytest
+        run: pytest
