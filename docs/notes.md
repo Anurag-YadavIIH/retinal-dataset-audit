@@ -7,6 +7,65 @@ written from evidence rather than reconstructed from memory.
 
 - [ ] Session 1: scaffold created, ingest + split + A/B experiment.
 
+## quality.py sanity checks: false rejects, uniform haze, raw-vs-preprocessed
+
+Three checks requested after the 0.7% reject rate landed, to make sure that
+number meant what it looked like it meant rather than being trusted at
+face value.
+
+**1. Inspected all 43 rejects by eye** (contact sheet, sorted by score).
+Clear majority (roughly the bottom half, scores <0.43) are genuinely poor
+-- very dark, hazy, indistinct, no real disagreement possible. A handful
+near the 0.45-0.50 boundary (e.g. `716_left.jpg`, the oval-cropped image
+from the FOV investigation above, at 0.493) show enough visible vessel/disc
+structure that a human grader might call them borderline-gradable rather
+than clearly ungradable. That is expected behaviour at any hard cutoff on
+a continuous score, not evidence of a scoring bug -- no clearly-good image
+(comparable to the 0.99 examples) was found sitting in the reject pile.
+**No false rejects found; some genuinely ambiguous near-boundary cases,
+correctly described as such rather than as clean failures.**
+
+**2. Uniform haze (the cataract case) -- confirmed as a real, unfixed
+limitation.** Checked the specific image flagged during the FOV
+investigation as visually hazy (`1281_left.jpg`): score **0.93**, 81st
+percentile. Searched further using mean HSV saturation as a haze proxy
+among score>=0.85 images (haze desaturates colour) and found worse cases
+by eye: `1264_right.jpg` (score **0.943**) and `2123_left.jpg` (score
+**0.979**, near the top of the entire dataset) are both essentially
+featureless uniformly hazy/foggy images -- no visible vessels, no visible
+disc, consistent with dense cataract or severe media opacity. Both should
+be clinically ungradable and both score near-perfect.
+
+Why the module misses this: `illumination_uniformity` measures *uneven*
+illumination (one side dark, one side bright) -- uniform haze is, by
+definition, uniform, so it reads as good. Blur metrics stay above
+threshold because moderate haze doesn't eliminate all high-frequency
+content (compression artifacts, faint specular reflections still register
+on Laplacian/Tenengrad), even when the actual retinal structure a
+clinician needs is gone. There is no metric here that measures *global
+contrast* or "is there actually vessel structure to see," which is what
+would be needed to catch this. **Stated plainly as a known limitation, not
+fixed in this pass**: this quality module reliably catches blur, under/
+over-exposure, and uneven illumination; it does not reliably catch
+uniform haze. A real deployment would need an added contrast/entropy-style
+check (or a learned gradability classifier) specifically for this failure
+mode -- classical per-quadrant/per-pixel statistics of the kind used here
+structurally cannot distinguish "uniformly hazy" from "uniformly clear."
+
+**3. Raw Training Images/ comparison, to calibrate what 0.7% means.**
+`preprocessed_images/` (6392 files) is a subset of the raw pool (7000
+Training + 1000 Testing = 8000) -- roughly 20% of raw captures never made
+it into the curated set at all, before this project's own quality.py ever
+ran. Scored a random 400-image sample of the raw `Training Images/`
+folder with the identical code path (`compute_metrics` + `gradability_score`,
+same config thresholds): **17/400 = 4.2% reject rate**, against 0.7% on
+the already-curated `preprocessed_images/`. A 6x relative difference on
+the same thresholds, same code, different population -- the 0.7% number
+reflects that this dataset was already curated upstream, not that the
+module is lax. Reported at the sample size actually run (400 of 7000);
+the direction and rough magnitude are the useful signal here, not a
+precise population estimate.
+
 ## quality.py: preprocessed_images/ sizing, and the FOV-clipping threshold that wasn't real
 
 Checked directly before implementing: `preprocessed_images/` is uniformly
