@@ -18,16 +18,25 @@ land on both sides of the image-random split's folds.** Patient-grouped
 splitting eliminates this outright — 0 patients cross a fold boundary, by
 construction, every time.
 
-The downstream cost is real but modest and reported honestly, not inflated:
-a paired mean AUROC gap of 0.0173 (image-random scoring higher), consistent
-in direction across all 5/5 seeds, with an uncorrected 95% CI excluding
-zero but **not** surviving Bonferroni correction across the three metrics
-tested at n=5 seeds. The full statistical account — including two rounds of
-self-correction where an earlier draft of this analysis overstated the
-evidence — is in `docs/notes.md`. That process is part of the claim: a
-project whose central number survived being checked twice, and changed as a
-result, is more trustworthy than one that got the "right" answer on the
-first pass and stopped looking.
+The downstream cost is real but modest, and this project's most honest
+result about it is that **it did not replicate cleanly on a second run**.
+The first full run gave a paired mean AUROC gap of 0.0173 (image-random
+scoring higher), consistent across all 5/5 seeds, with an uncorrected 95%
+CI excluding zero but not surviving Bonferroni correction. A second run —
+same nominal seeds, training-set size matched within 0.85% of the first
+(the difference comes from also matching against arms C/D, which didn't
+exist yet the first time) — gave +0.0079, not statistically significant,
+3/5 seeds agreeing on direction, not 5/5. Both numbers are reported, not
+just the first, more favourable one. The full statistical account —
+including two rounds of self-correction where an earlier draft of the
+first run's analysis overstated the evidence, *and* the failure to
+replicate on the second — is in `docs/notes.md` and §9. That process is
+the claim as much as any single number is: a project whose central result
+survived being checked twice and being re-run once, and changed both
+times, is more trustworthy than one that got a clean answer on the first
+pass and stopped looking. What *does* replicate, exactly, every time,
+because it's a count rather than a statistic: the 42.3% patient overlap
+above.
 
 Investigating *why* the effect is smaller than 42.3% overlap would suggest
 turned out to be the most informative part of the project: fellow eyes
@@ -378,9 +387,43 @@ AUROC measured against a paired seed-to-seed noise floor of ~0.05 (the A/B
 result). **Arms C and D were predicted to be statistically
 indistinguishable from arm B.**
 
-**Result**: `[[FILL IN AFTER THE 4-ARM RUN COMPLETES — see artifacts/results_table.md
-and docs/notes.md for the full arm C/D numbers, paired comparison against B,
-and whether the prediction held.]]`
+**Result — mixed, and reported that way rather than rounded to a single
+verdict**: mean AUROC across 5 seeds — A 0.8014, B 0.7936, C 0.7790,
+D 0.7820. Full paired-comparison detail (Bonferroni-adjusted CIs, sign
+consistency) is in `docs/notes.md`; the headline of it:
+
+- **D vs B: the null prediction held.** No metric significant, corrected
+  or not; mixed signs on AUROC/AUPRC.
+- **C vs B: the prediction did *not* fully hold — this is the surprising
+  result, and it's the one worth reading closely, not the confirming
+  one.** AUROC is lower for C than B by a small amount (-0.0146),
+  consistently across all 5/5 seeds, surviving Bonferroni correction
+  across the 6-test family (p=0.0078 against a 0.00833 bar) — though the
+  corrected CI's upper bound sits at -0.0002, a hair under zero, so this
+  is reported as a real but marginal finding, not a decisive one. A
+  plausible (not proven) mechanism: quality curation removes the
+  lowest-scoring images specifically, and it's entirely possible some of
+  those images were harder to grade by a human-legible standard without
+  being *uninformative* to a CNN — matching training-set *size* across
+  arms doesn't guarantee matching training-set *composition* effect.
+- **The A-vs-B gap itself did not replicate on this run.** Same nominal
+  seeds, matched size within 0.85% of the original A/B-only run — and
+  this time the AUROC gap was +0.0079 (not +0.0173), p=0.29 (not 0.037),
+  3/5 seeds agreeing on direction (not 5/5). This is not a contradiction
+  to explain away; it is the underpowered-at-n=5 caveat from §1, now
+  demonstrated by an actual second draw rather than argued from a power
+  calculation alone. If a ~38-image (0.85%) difference in the training
+  pool — an artefact of matching against arms that didn't exist in the
+  first run — was enough to flip "significant, unanimous" to "not
+  significant, 3/5," n=5 was always going to be this fragile.
+
+Curation earning its place in this pipeline by catching a real integrity
+problem (8 cross-patient duplicate pairs, §7) rather than by improving a
+metric turned out to be literally the honest description for arm D, and
+worth stating just as plainly for arm C, which *did* move a metric — just
+not in the direction curation is usually assumed to move it, and not by
+much. Full numbers, all four arms, both split strategies where
+applicable: `docs/notes.md` and `artifacts/results_table.md`.
 
 ## 10. Limitations
 
@@ -536,26 +579,37 @@ them first is the better position:
     many real cases does this model miss?"
 
 11. **If the A-vs-B gap had come out near zero, what would you conclude?**
-    That the *overlap* is still real and exact (42.3% of patients,
-    unconditionally true regardless of any downstream model result) but
-    that *this particular* model/task/dataset combination wasn't sensitive
-    enough to exploit it detectably at this scale — and I'd say so plainly
-    rather than either burying a null result or reaching for a smaller
-    threshold/different metric until something looked significant. This
-    project already practices exactly that stance on the curation arms:
-    C and D were predicted in writing, before running them, to be
-    statistically indistinguishable from B, because 43+22 removed images
-    out of 6392 can't plausibly move a metric with a ~0.05 seed-noise
-    floor — a well-explained null is treated as a legitimate finding here,
-    not a failure to report around.
+    This isn't hypothetical — it's close to what actually happened on the
+    second full run (after arms C/D existed and forced a slightly
+    different, more tightly matched training-set cap): the gap dropped
+    from +0.0173 (significant uncorrected, 5/5 sign-consistent) to +0.0079
+    (p=0.29, 3/5 sign-consistent). My conclusion in that situation: the
+    *overlap* is still real and exact (42.3% of patients, unconditionally
+    true regardless of any downstream model result), but this particular
+    model/task/dataset/seed-count combination isn't reliably showing a
+    detectable downstream effect — and I'd say so plainly rather than
+    quietly reporting only the first, more favourable run. This project
+    also practices the same stance on the curation arms: C and D were
+    predicted in writing, before running them, to be statistically
+    indistinguishable from B. That held for D. It did *not* fully hold for
+    C, which showed a small but 5/5-consistent AUROC *decrease* — and I
+    report that as the surprising result it is, with a hypothesis for why
+    (curation matches training-set size, not composition), rather than
+    rounding it back to the predicted null because the null was what I
+    expected to find.
 
 12. **What is the single weakest part of this project?**
-    n=5 seeds. Every other number in this project — the 42.3% overlap, the
-    77.8% concordance, the 8 verified duplicate pairs, the 0.7% reject
-    rate — is either an exact count or independently cross-checked by eye.
-    The one number that matters most for the headline claim (the A-vs-B
-    AUROC gap) is the one resting on the thinnest statistical foundation:
-    the Bonferroni-corrected confidence intervals include zero, and this
-    project says so directly rather than hiding behind an uncorrected
-    p-value. More seeds is the honest fix, not a smaller correction or a
-    friendlier test.
+    n=5 seeds — and this project has direct, empirical proof of it, not
+    just a power calculation. Re-running the A-vs-B comparison a second
+    time, under nearly identical conditions (same nominal seeds, training
+    set matched within 0.85% of the original), was enough to flip the
+    result from "significant, unanimous direction" to "not significant,
+    3/5 agreeing." Every other number in this project — the 42.3%
+    overlap, the 77.8% concordance, the 8 verified duplicate pairs, the
+    0.7% reject rate — is either an exact count or independently
+    cross-checked by eye. The one number that matters most for the
+    headline claim is the one resting on the thinnest statistical
+    foundation, and now has a failed replication attached to it as direct
+    evidence of exactly that. More seeds is the honest fix, not a smaller
+    correction, a friendlier test, or reporting only the run that came out
+    cleaner.

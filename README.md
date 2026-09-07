@@ -20,29 +20,60 @@ splitting (`patient_group`) eliminates this outright — 0 patients cross a
 fold boundary, by construction, every time. This is the leakage the rest of
 this project measures the downstream cost of.
 
-### Downstream effect on a trained model (arms A vs. B, 5 seeds, full dataset)
+### Downstream effect on a trained model (4 arms, 5 seeds, full dataset)
 
-| Metric | A (image_random) | B (patient_group) | Mean diff (A−B) | 95% CI | Bonferroni-adjusted |
+The single most honest result in this project: **the A-vs-B effect did not
+replicate cleanly on a second run.**
+
+| Run | AUROC diff (A−B) | p (uncorrected) | Sign consistency |
+|---|---|---|---|
+| First (A/B matched only against each other) | +0.0173 | 0.037 | 5/5 seeds |
+| Second (A/B/C/D all matched together, size within 0.85% of the first) | +0.0079 | 0.29 | 3/5 seeds |
+
+Same nominal seeds both times. The training-set size changed by under 1%
+(matching against arms C/D, which didn't exist for the first run, pulled
+the cap down slightly) — and that was enough to flip the result from
+"significant, unanimous direction" to "not significant, majority but not
+unanimous." Neither run's Bonferroni-corrected confidence interval ever
+excluded zero. **This is not a settled result, and this project reports
+both runs rather than the one that came out cleaner.** Full statistical
+detail — including two rounds of self-correction on the first run's
+analysis, and why re-running is more informative than a power calculation
+— is in `docs/notes.md`.
+
+### All four arms
+
+| Arm | Data | Split | AUROC | AUPRC | Sens @ 95% Spec |
 |---|---|---|---|---|---|
-| AUROC | 0.8098 ± 0.0069 | 0.7926 ± 0.0083 | 0.0173 | [0.0018, 0.0328] | [-0.0048, 0.0394] |
-| AUPRC | 0.8567 ± 0.0052 | 0.8450 ± 0.0060 | 0.0117 | [0.0007, 0.0227] | [-0.0040, 0.0274] |
-| Sens @ 95% Spec | 0.4554 ± 0.0262 | 0.4378 ± 0.0102 | 0.0176 | [-0.0258, 0.0610] | [-0.0443, 0.0795] |
+| A | raw | image-random | 0.8014 ± 0.0129 | 0.8512 ± 0.0117 | 0.4446 ± 0.0252 |
+| B | raw | patient-grouped | 0.7936 ± 0.0028 | 0.8450 ± 0.0032 | 0.4207 ± 0.0176 |
+| C | quality-curated | patient-grouped | 0.7790 ± 0.0044 | 0.8382 ± 0.0058 | 0.4248 ± 0.0284 |
+| D | curated + deduplicated | patient-grouped | 0.7820 ± 0.0117 | 0.8404 ± 0.0086 | 0.4495 ± 0.0183 |
 
-Reported honestly, not inflated and not buried: the direction is
-consistent across all 5/5 seeds on AUROC and AUPRC, and the uncorrected 95%
-CIs exclude zero — but neither survives Bonferroni correction for testing
-3 metrics at this seed count (n=5). Sensitivity at 95% specificity shows no
-significant difference at all. **This is not a settled result.** It is
-consistent with a real, modest effect on the threshold-independent
-metrics, and the data cannot rule out zero (or a small effect in the wrong
-direction) once corrected. Full statistical detail, including why an
-earlier draft of this table overstated the evidence twice before landing
-here, is in `docs/notes.md`.
+(Numbers above are the second, all-four-arms-matched run — the more
+methodologically correct one, since it caps every arm's training size
+against the smallest of all four rather than just A and B.)
 
-Arms C and D (quality-curated, deduplicated) are not run yet — this table
-covers arms A and B only, on raw data. All arms use the same seed, the
-same ResNet18 hyperparameters, and matched training-set sizes, so the only
-variable is the data path.
+**Predicted in writing, before running C and D**: 43 quality-rejected
+images and at most 22 deduplicated images out of 6392 (0.7% and 0.3%)
+can't plausibly move a metric with the seed-noise floor demonstrated
+above — arms C and D were expected to be statistically indistinguishable
+from B. **That held for D.** It did **not** fully hold for C: AUROC is
+lower for C than B by a small amount (−0.0146), consistently across all
+5/5 seeds, surviving Bonferroni correction across the 6-comparison family
+— though only just (corrected CI upper bound −0.0002). A plausible,
+falsifiable explanation, not a proven one: matching training-set *size*
+across arms doesn't guarantee matching training-set *composition* —
+quality curation removes the specific lowest-scoring images, and some of
+those may have been informative to a CNN despite being hard to grade by a
+human-legible standard. Full comparison tables (C vs. B, D vs. B, same
+statistical rigor as A vs. B above) are in `docs/notes.md`.
+
+All arms use the same seed sequence, the same ResNet18 hyperparameters,
+and training-set size matched across all four arms (not just within a
+curation level) — the point being that if a curated arm's smaller natural
+pool went uncapped, any difference from B would measure dataset size, not
+curation.
 
 ### Why the effect is smaller than the overlap suggests
 

@@ -7,6 +7,108 @@ written from evidence rather than reconstructed from memory.
 
 - [ ] Session 1: scaffold created, ingest + split + A/B experiment.
 
+## Arms C and D: full 4-arm run -- the prediction partly held, and A-vs-B didn't replicate
+
+Full dataset, 5 seeds (42-46), epochs=15, GPU, train size matched across
+all four arms (cap=4435, computed fresh from A/B/C/D's actual curated
+pools -- natural sizes were A=4473, B=4474, C=4443, D=4435). Total
+wall-clock ~3h57m (A: 57.7min, B: 84.5min -- this arm overlapped with an
+unrelated ~50min CPU-contention stall from a concurrent analysis task
+requested mid-run, see below, C: 56.7min, D: 37.9min).
+
+Mean +/- std across 5 seeds (ddof=1):
+
+| Arm | AUROC | AUPRC | Sens@95%Spec |
+|---|---|---|---|
+| A (image_random) | 0.8014 +/- 0.0129 | 0.8512 +/- 0.0117 | 0.4446 +/- 0.0252 |
+| B (patient_group) | 0.7936 +/- 0.0028 | 0.8450 +/- 0.0032 | 0.4207 +/- 0.0176 |
+| C (quality) | 0.7790 +/- 0.0044 | 0.8382 +/- 0.0058 | 0.4248 +/- 0.0284 |
+| D (quality+dedupe) | 0.7820 +/- 0.0117 | 0.8404 +/- 0.0086 | 0.4495 +/- 0.0183 |
+
+### The A-vs-B gap did not replicate on this run -- reported as prominently as the original finding
+
+Same nominal seeds (42-46), same split strategies, matched training size
+within half a percent of the original A/B-only run (4435 vs 4473) -- and
+this time: mean AUROC diff (A-B) = **+0.0079** (was +0.0173), t=1.23,
+**p=0.29** (was p=0.037), sign 3/5 favouring A (was 5/5). Neither
+uncorrected significance nor sign-consistency survived. This is not a
+contradiction or an error to explain away -- it is exactly what n=5 being
+underpowered *means*, demonstrated empirically by an actual second draw
+rather than argued from a power calculation. The original write-up
+already said the Bonferroni-corrected CIs included zero and that this
+wasn't a settled result at n=5; this run is that caveat made concrete.
+
+One technical note, so the replication is understood precisely rather
+than treated as an unexplained mystery: this is not a literal
+same-seed-same-result puzzle. `_cap_train_size` samples down to the cap
+using a Generator seeded on `cfg["seed"]` (always 42), but the cap itself
+changed (4473 -> 4435, because *this* run had to match across all four
+arms, not just two) -- `rng.choice(n, size=cap, ...)` draws a different
+specific subset when `size` changes, even from an identical seed. So the
+two A runs trained on ~99.15% overlapping but not identical image sets.
+That's a real, understood difference, not nothing -- but it's a ~38-image
+(0.85%) perturbation, and it was enough to flip the result from
+"significant, 5/5 sign-consistent" to "not significant, 3/5." If a
+perturbation this small can do that, n=5 was already living right at the
+edge of noise before this run confirmed it.
+
+### C vs B and D vs B, same rigor as the A-vs-B writeup
+
+No a priori direction was predicted for these two (unlike A-vs-B, where
+the leakage hypothesis justified a one-sided test) -- curation could
+plausibly help, hurt, or do nothing, so these are two-sided by default.
+Family of 6 tests (3 metrics x 2 comparisons): Bonferroni alpha =
+0.05/6 = 0.00833, t_bonf(df=4) = 4.851.
+
+| Comparison | Metric | Mean diff | t | p | 95% CI | Bonferroni CI | Sign |
+|---|---|---|---|---|---|---|---|
+| C - B | AUROC | -0.0146 | -4.93 | **0.0078** | [-0.0228,-0.0064] | [-0.0290,-0.0002] | 0/5 (all negative) |
+| C - B | AUPRC | -0.0068 | -2.11 | 0.1025 | [-0.0157,+0.0021] | [-0.0223,+0.0088] | 0/5 (all negative) |
+| C - B | Sens@95 | +0.0041 | 0.36 | 0.7405 | [-0.0278,+0.0360] | [-0.0517,+0.0599] | 3/5 |
+| D - B | AUROC | -0.0116 | -1.84 | 0.1403 | [-0.0290,+0.0059] | [-0.0421,+0.0190] | 1/5 |
+| D - B | AUPRC | -0.0046 | -0.88 | 0.4265 | [-0.0191,+0.0099] | [-0.0299,+0.0207] | 2/5 |
+| D - B | Sens@95 | +0.0288 | 1.80 | 0.1456 | [-0.0155,+0.0730] | [-0.0486,+0.1061] | 4/5 |
+
+**D vs B: the prediction held.** No metric significant, uncorrected or
+corrected; signs are mixed on AUROC/AUPRC. Consistent with "43+22 removed
+images can't plausibly move a metric with this much seed noise."
+
+**C vs B: the prediction did not fully hold, and this is the surprising
+result requiring explanation, stated as such rather than smoothed over.**
+AUROC is lower for C than B, by a small but real amount (-0.0146,
+~1.5 points), *consistently* (5/5 seeds, every one negative -- the
+tightest sign-consistency in this entire project), and the difference
+**survives Bonferroni correction at the 6-test family level** (p=0.0078
+< 0.00833) -- though only just: the corrected CI's upper bound is
+-0.0002, a hair below zero. AUPRC points the same direction but does not
+reach significance either way. Sens@95%Spec shows no effect.
+
+Why this is plausible rather than a red flag: matching training-set
+*size* across arms (which this project does carefully) does not match
+training-set *composition*. Quality curation removed the 43 lowest-scoring
+images specifically -- the blurriest, darkest, most uneven-illumination
+examples in the dataset (see the quality.py section below). It's a
+real, testable hypothesis that some of those images, while genuinely
+harder to grade by a human-legible standard, were not *uninformative* to
+a CNN -- removing them changes what the model sees during training in a
+way that "curation should only help or do nothing" doesn't predict, and
+arm B and arm C both happen to have unusually low between-seed variance
+(0.0028 and 0.0044 respectively, versus 0.0129/0.0117 for A/D), which is
+exactly the condition under which a small, real, consistent effect
+becomes statistically detectable rather than lost in noise. This is a
+hypothesis, not a proven mechanism -- not tested further here, but a
+concrete, falsifiable one for future work, not a hand-wave.
+
+**Net honest verdict, stated in advance and checked against reality**: the
+predicted null (quality/dedupe curation is too small to move AUROC) held
+for D and did not fully hold for C, where a small, sign-consistent,
+marginally-significant *decrease* was found instead of the predicted null.
+Curation earning its place by catching a real integrity problem (the 8
+duplicate pairs) rather than by improving a metric turned out to be
+literally true for D, and turned out to be worth stating even more plainly
+for C, which moved a metric -- just not in the direction curation is
+usually assumed to move it.
+
 ## dedupe.py: phash verified properly this time, embedding threshold was also wrong
 
 Implemented per CLAUDE.md step 6: phash candidates + pretrained-ResNet18
