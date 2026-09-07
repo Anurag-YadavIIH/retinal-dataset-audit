@@ -10,14 +10,20 @@
 Same seed, same hyperparameters, matched training-set sizes. If the sizes are
 not matched, the table measures dataset size rather than curation.
 
-Only A and B are runnable: C and D need quality/dedupe, which are later
-build-order steps that don't exist yet. Requesting them raises rather than
-silently skipping or running on the wrong data.
+Curation removes images (quality: ~0.7% of the dataset; quality+dedupe: an
+additional ~0.2%), so C and D's natural pools are smaller than A/B's raw
+one. Every arm is capped to the smallest natural train size across all
+FOUR configured arms, not just the ones sharing a curation level -- matching
+sizes within "raw" alone while leaving curated arms uncapped would let a
+curated arm's smaller pool masquerade as a curation effect when it's really
+just less data.
 """
 
 from __future__ import annotations
 
 import json
+
+import pandas as pd
 
 from retinaprep.config import resolve_path
 from retinaprep.utils import get_logger
@@ -32,32 +38,82 @@ ARMS = {
 }
 
 
-def _compute_train_size_cap(cfg: dict) -> int | None:
-    """Smallest natural train-set size among the currently-runnable arms.
+def build_curated_manifest(cfg: dict, curation: str) -> pd.DataFrame:
+    """The manifest for one curation level: raw, quality, or quality+dedupe.
 
-    Only considers arms with "raw" curation (A/B) -- C/D aren't implemented,
-    so they can't be part of the size-matching pool yet. Reads straight from
-    the split JSONs (unaffected by which specific arm/seed is being trained),
-    so every run in a session agrees on the same cap.
+    "quality" drops every image below cfg.quality.reject_below_score.
+    "quality+dedupe" additionally drops all but one image per verified
+    duplicate cluster (artifacts/duplicates.parquet), keeping the
+    higher quality-scored image of each pair -- a duplicate already
+    quality-rejected on one side needs no further action, since it's down
+    to a single surviving copy already.
+    """
+    artifacts_dir = resolve_path(cfg, cfg["paths"]["artifacts"])
+    manifest = pd.read_parquet(artifacts_dir / "manifest.parquet")
+
+    if curation == "raw":
+        return manifest
+
+    quality = pd.read_parquet(artifacts_dir / "quality.parquet")
+    reject_below = cfg["quality"]["reject_below_score"]
+    rejected = set(quality.loc[quality["score"] < reject_below, "image_path"])
+    curated = manifest[~manifest["image_path"].isin(rejected)].reset_index(drop=True)
+
+    if curation == "quality":
+        return curated
+
+    if curation == "quality+dedupe":
+        dup = pd.read_parquet(artifacts_dir / "duplicates.parquet")
+        quality_by_path = quality.set_index("image_path")["score"]
+        curated_paths = set(curated["image_path"])
+        drop: set[str] = set()
+        for _cluster_id, group in dup[dup["is_duplicate"]].groupby("cluster_id"):
+            survivors = [p for p in group["image_path"] if p in curated_paths]
+            if len(survivors) < 2:
+                continue  # already resolved by quality curation
+            keep = max(survivors, key=lambda p: quality_by_path.get(p, 0.0))
+            drop.update(p for p in survivors if p != keep)
+        return curated[~curated["image_path"].isin(drop)].reset_index(drop=True)
+
+    raise ValueError(f"Unknown curation {curation!r}")
+
+
+def build_arm_split(cfg: dict, arm: str) -> tuple[pd.DataFrame, dict]:
+    """The (manifest, split) pair for one arm, split freshly on its own curated pool."""
+    from retinaprep.splits import image_random_split, patient_group_split
+
+    spec = ARMS[arm]
+    manifest = build_curated_manifest(cfg, spec["curation"])
+    if spec["split"] == "patient_group":
+        split = patient_group_split(manifest, cfg)
+    elif spec["split"] == "image_random":
+        split = image_random_split(manifest, cfg)
+    else:
+        raise ValueError(f"Unknown split {spec['split']!r} for arm {arm}")
+    return manifest, split
+
+
+def _compute_train_size_cap(cfg: dict) -> int | None:
+    """Smallest natural train-set size across all FOUR configured arms.
+
+    Recomputes each arm's manifest and split fresh rather than trusting
+    whatever is on disk from a previous run, so the cap is always correct
+    for the current quality/dedupe state, not stale.
     """
     if not cfg["experiment"].get("match_arm_sizes", True):
         return None
 
-    artifacts_dir = resolve_path(cfg, cfg["paths"]["artifacts"])
-    runnable = [a for a in cfg["experiment"]["arms"] if ARMS.get(a, {}).get("curation") == "raw"]
-
-    sizes = []
-    for a in runnable:
-        split_path = artifacts_dir / "splits" / f"{ARMS[a]['split']}.json"
-        if not split_path.exists():
-            continue
-        with open(split_path) as fh:
-            sizes.append(len(json.load(fh)["train"]))
+    arms = [a for a in cfg["experiment"]["arms"] if a in ARMS]
+    sizes = {}
+    for a in arms:
+        _manifest, split = build_arm_split(cfg, a)
+        sizes[a] = len(split["train"])
 
     if not sizes:
         return None
-    logger.info("Train-size cap across runnable arms %s: %d", runnable, min(sizes))
-    return min(sizes)
+    cap = min(sizes.values())
+    logger.info("Natural train sizes %s -> cap %d", sizes, cap)
+    return cap
 
 
 def run_experiment(
@@ -84,12 +140,6 @@ def run_experiment(
         raise SystemExit(f"Unknown arm {arm!r}. Choose from {sorted(ARMS)}.")
 
     spec = ARMS[arm]
-    if spec["curation"] != "raw":
-        raise NotImplementedError(
-            f"Arm {arm} needs {spec['curation']!r} curation, which isn't built yet "
-            "(quality/dedupe are later build-order steps). Only A and B are runnable."
-        )
-
     from retinaprep.train import run_train
 
     if seed_override is not None:
@@ -101,6 +151,7 @@ def run_experiment(
         base_name = run_name or arm
         run_names = [f"{base_name}_seed{s}" for s in seeds]
 
+    manifest, split = build_arm_split(cfg, arm)
     train_size_cap = _compute_train_size_cap(cfg)
     results = [
         run_train(
@@ -110,6 +161,8 @@ def run_experiment(
             arm=arm,
             seed_override=seed,
             train_size_cap=train_size_cap,
+            manifest=manifest,
+            split=split,
         )
         for seed, rn in zip(seeds, run_names, strict=True)
     ]

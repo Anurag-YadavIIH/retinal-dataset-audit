@@ -80,14 +80,19 @@ class _FundusDataset(Dataset):
         return image, label
 
 
-def build_dataloaders(cfg: dict, split: dict) -> tuple[DataLoader, DataLoader, DataLoader]:
+def build_dataloaders(
+    cfg: dict, split: dict, manifest: pd.DataFrame | None = None
+) -> tuple[DataLoader, DataLoader, DataLoader]:
     """Resize to cfg.train.image_size, crop to cfg.train.crop_size, ImageNet norm.
 
-    Labels come from artifacts/manifest.parquet, keyed by image_path, so this
-    only needs the split's per-fold path lists, not the manifest itself.
+    Labels come from `manifest` (default: read fresh from
+    artifacts/manifest.parquet), keyed by image_path -- pass an explicit
+    curated manifest (experiment.py's build_curated_manifest) for arms whose
+    pool isn't the raw canonical one.
     """
-    artifacts_dir = resolve_path(cfg, cfg["paths"]["artifacts"])
-    manifest = pd.read_parquet(artifacts_dir / "manifest.parquet")
+    if manifest is None:
+        artifacts_dir = resolve_path(cfg, cfg["paths"]["artifacts"])
+        manifest = pd.read_parquet(artifacts_dir / "manifest.parquet")
     label_by_path = manifest.set_index("image_path")["label"]
 
     train_cfg = cfg["train"]
@@ -178,12 +183,17 @@ def run_train(
     arm: str | None = None,
     seed_override: int | None = None,
     train_size_cap: int | None = None,
+    manifest: pd.DataFrame | None = None,
+    split: dict | None = None,
 ) -> dict:
     """Train, early-stop on val AUROC, save artifacts/runs/<name>/metrics.json.
 
     `run_name` controls the output directory (defaults to `split_name`);
-    `arm`/`seed_override`/`train_size_cap` are set by experiment.py when this
-    is one arm of a comparison rather than a standalone `retinaprep train`.
+    `arm`/`seed_override`/`train_size_cap`/`manifest`/`split` are set by
+    experiment.py when this is one arm of a comparison rather than a
+    standalone `retinaprep train`. When `split` is omitted, it's read from
+    artifacts/splits/<split_name>.json (the plain CLI path); `manifest`
+    defaults to artifacts/manifest.parquet inside build_dataloaders.
     """
     if split_name is None:
         raise SystemExit("run_train needs --split (image_random|patient_group)")
@@ -196,9 +206,10 @@ def run_train(
     logger.info("Device: %s | torch %s", device, torch.__version__)
 
     artifacts_dir = resolve_path(cfg, cfg["paths"]["artifacts"])
-    split_path = artifacts_dir / "splits" / f"{split_name}.json"
-    with open(split_path) as fh:
-        split = json.load(fh)
+    if split is None:
+        split_path = artifacts_dir / "splits" / f"{split_name}.json"
+        with open(split_path) as fh:
+            split = json.load(fh)
 
     n_train_before_cap = len(split["train"])
     split = {**split, "train": _cap_train_size(split["train"], train_size_cap, cfg["seed"])}
@@ -209,7 +220,7 @@ def run_train(
             len(split["train"]),
         )
 
-    train_loader, val_loader, test_loader = build_dataloaders(cfg, split)
+    train_loader, val_loader, test_loader = build_dataloaders(cfg, split, manifest=manifest)
 
     model = build_model(cfg).to(device)
     optimizer = torch.optim.Adam(
