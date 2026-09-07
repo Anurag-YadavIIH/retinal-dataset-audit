@@ -7,6 +7,68 @@ written from evidence rather than reconstructed from memory.
 
 - [ ] Session 1: scaffold created, ingest + split + A/B experiment.
 
+## quality.py: preprocessed_images/ sizing, and the FOV-clipping threshold that wasn't real
+
+Checked directly before implementing: `preprocessed_images/` is uniformly
+512x512 (200-image random sample, zero exceptions), so the classic
+resolution-dependence trap for blur metrics is moot for what this pipeline
+actually scores. The raw `Training Images/` mixes 12+ distinct resolutions
+(894px-3888px) in the first 50 files alone, so `variance_of_laplacian` and
+`tenengrad` still resize to a fixed size before scoring unconditionally --
+right for that folder and for any future dataset this module gets pointed
+at, even though it's a no-op here.
+
+**First implementation hard-rejected 51.1% of the dataset.** Diagnosed
+before reporting that number: it was not the weighted score (blur/exposure/
+illumination) -- that alone rejected only 0.5% of FOV-valid images, which
+looked sane. It was a hard "FOV clipped" gate checking whether the *fitted
+enclosing circle's* geometric extent exceeded the frame. `fov_radius_frac`
+has median 0.998 across all 6392 real images -- the FOV is pre-cropped to
+fill the frame almost exactly -- so ordinary off-centre fitting noise on a
+real (non-perfectly-circular) photograph triggers that check on the
+majority of completely normal images. Not a threshold that needed
+retuning; a wrong check.
+
+Fixed once (contour-touches-border instead of fitted-circle-exceeds-frame)
+-- reject rate dropped to 38.5%, still absurd. Investigated the remaining
+gate visually rather than re-tuning blind: pulled real examples across the
+circularity range (contour_area / (pi * enclosing_radius^2), which should
+be ~1.0 for a genuine full circle). Findings, all confirmed by eye:
+- circ ~0.96: near-perfect circle, trivially fine.
+- circ ~0.90: a genuinely bad image (hazy/media-opacity artifacts) -- but
+  that's a quality problem the score should catch on its own merits, not
+  evidence of frame clipping.
+- circ ~0.85: real truncation -- a visible straight-edge cutoff.
+- circ ~0.80 and ~0.70: **complete, clean, fully gradable images that are
+  oval-cropped rather than circular** -- disc, macula and vessels all
+  clearly visible, nothing missing. Not clipped at all; just not a circle.
+
+Circularity conflates three different things on this dataset (real
+truncation, complete oval crops, and hazy images) and cannot cleanly
+separate them with a single threshold -- confirmed by direct visual
+inspection at several threshold values, not assumed. Forcing it to gate
+rejection punishes the common, legitimate oval-crop case as if it were
+damage. **Fix:** `fov_clipped` is still computed and stored in
+`quality.parquet` (circularity < 0.85) for visibility, but no longer gates
+`fov_valid` or the score. Only `fov_radius_frac_min` (a real, uncontroversial
+"is the field too small" check) gates FOV validity now. The transparent
+weighted score is what actually determines gradability -- which is also
+more useful in practice: it says blur, exposure, or illumination was the
+problem, rather than an opaque "FOV rejected" that, as built, was usually
+wrong about why.
+
+**Final reject rate: 43/6392 = 0.7%**, well under the ~10% concern
+threshold -- reported as measured, no further tuning attempted once the
+number looked sane and matched the (unforced) weighted-score-only rate
+from the diagnosis step. Contact sheet of the 20 lowest- and 20
+highest-scoring images (`artifacts/quality_contact_sheet.png`) confirms
+the score direction by eye: the lowest 20 show visible blur, haze, or
+uneven illumination; the highest 20 (all ~0.99) are crisp, well-exposed,
+with clearly visible vessels and disc. There are no ground-truth quality
+labels for this dataset, so this eyeball check against the extremes is the
+honest substitute for validation, per the same principle applied to the
+dedupe threshold investigation above.
+
 ## Why is the measured effect (0.017 AUROC) smaller than 42.3% patient overlap suggests?
 
 Report-only investigation, no pipeline changes, no training re-run. Three

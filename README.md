@@ -44,6 +44,64 @@ covers arms A and B only, on raw data. All arms use the same seed, the
 same ResNet18 hyperparameters, and matched training-set sizes, so the only
 variable is the data path.
 
+### Why the effect is smaller than the overlap suggests
+
+42.3% patient overlap and a ~0.017 AUROC effect look like a mismatch until
+you separate two different things: **patient overlap leaks the patient,
+not the label.** Among 3034 multi-eye patients, fellow eyes share the same
+binary (normal/abnormal) label only **77.8%** of the time — real
+correlation (chance alone, at this dataset's 44.96%/55.04% class balance,
+would give 50.5%), but nowhere near the ~100% that would make leaking a
+patient equivalent to leaking their answer. For **22.2%** of multi-eye
+patients, the fellow eye's label is actively uninformative — a
+unilaterally-diseased patient's second eye is, correctly, often labelled
+normal.
+
+That 22.2% discordance dilutes the leakage ceiling directly: an
+image-random split can make a fellow eye's *image* visible across the
+train/test boundary, but it can only make the fellow eye's *label*
+informative about 78% of the time. The measured effect being a modest
+0.017 AUROC rather than something dramatic isn't a contradiction of the
+42.3% overlap figure — it's what you'd expect once you account for what
+the overlap actually hands the model. Full investigation, including two
+other candidate explanations tested and a training-curve analysis, is in
+`docs/notes.md`.
+
+### Dataset integrity findings
+
+Two things came out of investigating the effect size that are worth
+stating on their own, independent of the A/B result:
+
+**Two genuine cross-patient duplicates exist in the raw data** — patient
+352 vs. 973, and patient 2487 vs. 3185, each confirmed on *both* eyes
+(near-zero pixel difference despite different file encoding — the same
+photograph, filed under two different patient IDs). This is exactly why
+this pipeline needs both a grouped split *and* a deduplication stage, not
+just one: **patient-grouped splitting cannot catch this.** It only
+protects against a single declared patient ID crossing a fold boundary —
+it has no way to know that two *different* declared IDs are actually the
+same underlying capture. Only content-based deduplication closes that
+gap. (Both pairs currently happen to sit in the same fold under both
+split strategies, so they are not inflating the A/B numbers above — but
+that's luck, not protection, and a different seed could easily place one
+copy in train and the other in test.)
+
+**Perceptual hashing (phash) is unreliable on fundus photography without
+a tight, verified threshold.** At the naive default (`hamming<=6`), phash
+flags 13,733 near-duplicate pairs across 6392 images — visually inspected,
+and the overwhelming majority are false positives. Fundus photos share
+enough generic macro-structure (dark background, circular field of view,
+similar framing) that a coarse perceptual hash collapses unrelated images
+together; this is a property of the imaging modality, not a bug in this
+implementation. Even at the strictest possible bucket (`hamming==0`,
+bit-identical hash), roughly half the flagged pairs were still false
+positives under direct pixel-difference verification — a hash match alone
+is not sufficient evidence of duplication in this domain, at any
+threshold, without a secondary check. Anyone building a dedupe step for
+fundus (or likely other structurally-homogeneous medical imaging) data
+should expect this and budget for verification, not just threshold
+tuning.
+
 ---
 
 ## Why patient-level splitting matters in ophthalmology specifically
