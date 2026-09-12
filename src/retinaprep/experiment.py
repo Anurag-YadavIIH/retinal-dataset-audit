@@ -26,7 +26,7 @@ import json
 import pandas as pd
 
 from retinaprep.config import resolve_path
-from retinaprep.utils import get_logger
+from retinaprep.utils import get_logger, load_current_run_metrics
 
 logger = get_logger(__name__)
 
@@ -172,21 +172,25 @@ def run_experiment(
 
 
 def write_results_table(cfg: dict) -> None:
-    """Scan every artifacts/runs/*/metrics.json and (re)write the comparison table.
+    """Write the comparison table for each arm's current run cohort.
 
     Idempotent and order-independent: always reflects whatever has actually
-    been run, not just the run that just finished.
+    been run, not just the run that just finished. "Current" means, per
+    arm, only the runs sharing that arm's most recently recorded
+    config_hash (utils.load_current_run_metrics) -- artifacts/runs/ never
+    overwrites, so older cohorts (a previous config, an earlier point in
+    the project's history) stay on disk and in index.json for provenance,
+    but must not silently blend into this table's per-arm averages.
     """
     artifacts_dir = resolve_path(cfg, cfg["paths"]["artifacts"])
-    runs_dir = artifacts_dir / "runs"
+    current = load_current_run_metrics(artifacts_dir)
 
     rows = []
-    if runs_dir.is_dir():
-        for run_dir in sorted(runs_dir.iterdir()):
-            metrics_path = run_dir / "metrics.json"
-            if metrics_path.exists():
-                with open(metrics_path) as fh:
-                    rows.append(json.load(fh))
+    for run_dir_name in current["run_dir"] if not current.empty else []:
+        metrics_path = artifacts_dir / "runs" / run_dir_name / "metrics.json"
+        if metrics_path.exists():
+            with open(metrics_path) as fh:
+                rows.append(json.load(fh))
 
     lines = [
         "| Run | Arm | Split | Seed | N train | AUROC | AUPRC | Sens@95%Spec "

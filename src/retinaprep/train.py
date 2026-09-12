@@ -20,7 +20,14 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import models, transforms
 
 from retinaprep.config import resolve_path
-from retinaprep.utils import get_logger, save_json, set_global_seed
+from retinaprep.utils import (
+    append_run_index,
+    config_hash,
+    get_logger,
+    run_timestamp,
+    save_json,
+    set_global_seed,
+)
 
 logger = get_logger(__name__)
 
@@ -186,9 +193,13 @@ def run_train(
     manifest: pd.DataFrame | None = None,
     split: dict | None = None,
 ) -> dict:
-    """Train, early-stop on val AUROC, save artifacts/runs/<name>/metrics.json.
+    """Train, early-stop on val AUROC, save artifacts/runs/<name>_<ts>_<hash>/metrics.json.
 
-    `run_name` controls the output directory (defaults to `split_name`);
+    Every run gets a unique directory (name, UTC timestamp, short config
+    hash) and one entry in artifacts/runs/index.json -- nothing overwrites,
+    so re-running the same arm/seed keeps the earlier result on disk instead
+    of silently discarding it. `run_name` controls the name prefix (defaults
+    to `split_name`);
     `arm`/`seed_override`/`train_size_cap`/`manifest`/`split` are set by
     experiment.py when this is one arm of a comparison rather than a
     standalone `retinaprep train`. When `split` is omitted, it's read from
@@ -273,11 +284,17 @@ def run_train(
     model.load_state_dict(best_state)
     test_metrics = evaluate(model, test_loader)
 
+    name = run_name or split_name
+    timestamp = run_timestamp()
+    cfg_hash = config_hash(cfg)
+
     result = {
-        "run_name": run_name or split_name,
+        "run_name": name,
         "arm": arm,
         "split_name": split_name,
         "seed": seed,
+        "config_hash": cfg_hash,
+        "timestamp": timestamp,
         "device": str(device),
         "torch_version": torch.__version__,
         "n_train": len(split["train"]),
@@ -291,7 +308,27 @@ def run_train(
         "config": cfg,
     }
 
-    run_dir = artifacts_dir / "runs" / (run_name or split_name)
+    # Unique per run -- never overwrites an earlier run with the same
+    # run_name (see utils.load_current_run_metrics for why that matters).
+    run_dir = artifacts_dir / "runs" / f"{name}_{timestamp}_{cfg_hash}"
     save_json(result, run_dir / "metrics.json")
     logger.info("Wrote %s", run_dir / "metrics.json")
+
+    append_run_index(
+        artifacts_dir,
+        {
+            "run_name": name,
+            "arm": arm,
+            "seed": seed,
+            "split_name": split_name,
+            "config_hash": cfg_hash,
+            "timestamp": timestamp,
+            "run_dir": run_dir.name,
+            "n_train": result["n_train"],
+            "auroc": test_metrics["auroc"],
+            "auprc": test_metrics["auprc"],
+            "sens_95_spec": test_metrics["sensitivity_at_95_specificity"],
+        },
+    )
+
     return result

@@ -14,8 +14,11 @@ dataset:
   # The Kaggle release ships both `full_df.csv` and `data.csv`.
   metadata_csv: full_df.csv
   image_dir: preprocessed_images
-  # Cap for a fast run. Set to null to use everything.
-  subsample_n: 2000
+  # null = full dataset (6392 images). This is what every headline number
+  # in README.md/WALKTHROUGH.md was measured on -- the default must match
+  # that, or a clean run silently reproduces nothing real. For a fast local
+  # smoke test, override explicitly: --set dataset.subsample_n=500
+  subsample_n: null
 
 label:
   # Binary task: 0 = normal, 1 = abnormal.
@@ -95,9 +98,9 @@ experiment:
   # confounded with dataset size.
   match_arm_sizes: true
   # Seeds to run per arm when none is passed explicitly: [seed, seed+1, ...].
-  # Override on the CLI, e.g. --set experiment.n_seeds=5, rather than editing
-  # this file for a one-off run.
-  n_seeds: 1
+  # 5 is what every headline result in README.md/WALKTHROUGH.md used. For a
+  # fast one-seed smoke test, override on the CLI: --set experiment.n_seeds=1
+  n_seeds: 5
 
 report:
   output_html: artifacts/qc_report.html

@@ -13,7 +13,6 @@ from __future__ import annotations
 import base64
 import importlib.util
 import io
-import json
 from pathlib import Path
 from types import ModuleType
 
@@ -26,7 +25,7 @@ from jinja2 import Template
 from PIL import Image
 
 from retinaprep.config import REPO_ROOT, resolve_path
-from retinaprep.utils import get_logger
+from retinaprep.utils import get_logger, load_current_run_metrics
 
 logger = get_logger(__name__)
 
@@ -96,30 +95,15 @@ def _class_balance_chart(balances: dict[str, pd.Series]) -> str:
 
 
 def _aggregate_results(cfg: dict) -> pd.DataFrame:
+    """Per arm, only the runs in that arm's current cohort -- see
+    utils.load_current_run_metrics for why older cohorts are excluded
+    rather than blended in once artifacts/runs/ stops overwriting."""
     artifacts_dir = resolve_path(cfg, cfg["paths"]["artifacts"])
-    runs_dir = artifacts_dir / "runs"
-    rows = []
-    if runs_dir.is_dir():
-        for run_dir in sorted(runs_dir.iterdir()):
-            metrics_path = run_dir / "metrics.json"
-            if metrics_path.exists():
-                with open(metrics_path) as fh:
-                    r = json.load(fh)
-                tm = r["test_metrics"]
-                rows.append(
-                    {
-                        "arm": r.get("arm") or "-",
-                        "seed": r["seed"],
-                        "n_train": r["n_train"],
-                        "auroc": tm["auroc"],
-                        "auprc": tm["auprc"],
-                        "sens_95_spec": tm["sensitivity_at_95_specificity"],
-                    }
-                )
-    if not rows:
+    df = load_current_run_metrics(artifacts_dir)
+    if df.empty:
         return pd.DataFrame()
+    df["arm"] = df["arm"].fillna("-")
 
-    df = pd.DataFrame(rows)
     summary = df.groupby("arm").agg(
         n_seeds=("seed", "count"),
         n_train=("n_train", "first"),

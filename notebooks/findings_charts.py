@@ -6,12 +6,14 @@ concordance, arm results, cosine-similarity separation) or is a historical
 measurement from a one-off investigation recorded in docs/notes.md, cited
 inline where it is used. Two numbers fall in the second category because
 the underlying training runs are not re-run in this session ("no new
-experiments"), and their per-seed data was overwritten in artifacts/runs/
-by the later 4-arm run that reused the same run-directory names: the first
-full-scale A/B run's per-seed AUROC (superseded by the second run, still
-recorded in docs/notes.md's "Full-scale A/B run" table) and the train-set
-overlap falsification test (a report-only investigation, never persisted
-as an artifact).
+experiments"), and their per-seed data predates artifacts/runs/index.json
+(train.py used to overwrite same-named run directories; it no longer
+does, see utils.append_run_index): the first full-scale A/B run's
+per-seed AUROC (superseded on disk by a later run that reused the same
+run-directory names before that fix landed, still recorded in
+docs/notes.md's "Full-scale A/B run" table) and the train-set overlap
+falsification test (a report-only investigation, never persisted as an
+artifact).
 
 Same base64-inline pattern as eda.py and report.py; every section returns
 (base64_png, takeaway) so report.py can reuse it directly.
@@ -41,6 +43,8 @@ from scipy import stats
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from retinaprep.utils import load_current_run_metrics  # noqa: E402
+
 ARTIFACTS = REPO_ROOT / "artifacts"
 
 # Historical: first full-scale A/B run (cap=4473), docs/notes.md "Full-scale
@@ -69,7 +73,7 @@ def _fig_to_base64(fig) -> str:
 
 
 def fig_patient_overlap() -> tuple[str, str]:
-    """42.3% of patients straddle image_random's folds; 0% straddle patient_group's."""
+    """42.0% of patients straddle image_random's folds; 0% straddle patient_group's."""
     manifest = pd.read_parquet(ARTIFACTS / "manifest.parquet")
     patient_of = manifest.set_index("image_path")["patient_id"]
 
@@ -146,25 +150,12 @@ def fig_concordance() -> tuple[str, str]:
 
 
 def _load_run_metrics() -> pd.DataFrame:
-    rows = []
-    runs_dir = ARTIFACTS / "runs"
-    for run_dir in sorted(runs_dir.iterdir()):
-        metrics_path = run_dir / "metrics.json"
-        if not metrics_path.exists():
-            continue
-        with open(metrics_path) as fh:
-            r = json.load(fh)
-        tm = r["test_metrics"]
-        rows.append(
-            {
-                "arm": r.get("arm") or "-",
-                "seed": r["seed"],
-                "auroc": tm["auroc"],
-                "auprc": tm["auprc"],
-                "sens_95_spec": tm["sensitivity_at_95_specificity"],
-            }
-        )
-    return pd.DataFrame(rows)
+    """Per arm, only that arm's current cohort -- see
+    retinaprep.utils.load_current_run_metrics. artifacts/runs/ no longer
+    overwrites, so older cohorts (a previous config, an earlier point in
+    the project's history) stay on disk and in artifacts/runs/index.json
+    for provenance, but must not silently blend into these charts."""
+    return load_current_run_metrics(ARTIFACTS)
 
 
 def fig_arm_results() -> tuple[str, str]:
