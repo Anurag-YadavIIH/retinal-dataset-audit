@@ -13,7 +13,7 @@ the same hyperparameters, the same training-set size, trained once on an
 image-random split (arm A) and once on a patient-grouped split (arm B),
 5 seeds each, on the real ODIR-5K dataset (6392 images, 3358 patients).
 
-The exact-count evidence needs no statistics: **42.3% of patients (1422/3358)
+The exact-count evidence needs no statistics: **42.0% of patients (1412/3358)
 land on both sides of the image-random split's folds.** Patient-grouped
 splitting eliminates this outright — 0 patients cross a fold boundary, by
 construction, every time.
@@ -35,10 +35,10 @@ the claim as much as any single number is: a project whose central result
 survived being checked twice and being re-run once, and changed both
 times, is more trustworthy than one that got a clean answer on the first
 pass and stopped looking. What *does* replicate, exactly, every time,
-because it's a count rather than a statistic: the 42.3% patient overlap
+because it's a count rather than a statistic: the 42.0% patient overlap
 above.
 
-Investigating *why* the effect is smaller than 42.3% overlap would suggest
+Investigating *why* the effect is smaller than 42.0% overlap would suggest
 turned out to be the most informative part of the project: fellow eyes
 share the same binary label only 77.8% of the time (vs. a 50.5% chance
 floor at this dataset's class balance) — leaking a patient's identity does
@@ -119,7 +119,7 @@ matter, but that's an empirical finding, not a guarantee the code makes.
 
 `patient_overlap` is the direct, assertable proof: it counts how many
 patient IDs appear in more than one fold. On the real full dataset:
-**0 for `patient_group`, 1422/3358 (42.3%) for `image_random`.** Every
+**0 for `patient_group`, 1412/3358 (42.0%) for `image_random`.** Every
 `patient_group_split` result in this codebase is checked against this
 function before being trusted for anything downstream.
 
@@ -141,7 +141,7 @@ actually quantify each one:
 2. **Two eyes, one patient ID.** This is what makes the leak mechanical
    and unavoidable under a naive split: a random shuffle of *images*
    doesn't know "these two rows are the same person," so it puts them on
-   opposite sides of the boundary constantly (42.3% of patients, measured).
+   opposite sides of the boundary constantly (42.0% of patients, measured).
    A domain with one image per subject (e.g. many chest X-ray sets, one
    film per patient per visit) doesn't have this specific failure mode at
    all — leakage there comes from other sources (repeat visits, near-
@@ -150,7 +150,7 @@ actually quantify each one:
 3. **Repeat visits and same-session recaptures.** A clinic re-photographs
    a bad capture, or the same patient returns for a follow-up. This
    project found a concrete instance of the *adjacent* problem — the same
-   underlying photograph filed under two **different** patient IDs (2
+   underlying photograph filed under two **different** patient IDs (8
    confirmed pairs, pixel-verified) — which patient-grouped splitting
    cannot catch, because it only groups by *declared* patient ID, and
    these are declared differently. Only deduplication closes that gap;
@@ -306,8 +306,10 @@ independent, pixel-structure-based signal doesn't care that this
 particular duplicate's two copies happen to differ enough in surface
 appearance (lighting/colour grading) to read as dissimilar to a semantic
 embedding. **This is the concrete, not-just-theoretical reason two methods
-are needed**: of the 8 confirmed pairs, phash alone would have found all
-8; embeddings alone would have permanently missed one. They fail in
+are needed**: of the 11 duplicate-pair-instances, phash alone would have
+found 8 (missing the 3 that only embeddings caught); embeddings alone
+would have found 10, permanently missing the one pair discussed above
+(3297 vs 4542, cosine 0.962). They fail in
 different directions on this modality — phash over-triggers on shared
 macro-structure, embeddings under-triggers on genuine duplicates whose
 lighting diverged enough — and neither failure mode is visible from
@@ -317,7 +319,7 @@ inside the other method.
 22 images, across 8 unique cross-patient pairs — the same underlying
 capture filed under two *different* patient IDs, confirmed by near-zero
 pixel difference on every pair. **The money metric**: of the 18 verified
-pairs (8 phash + 10 embedding, 6 found by both), 4 straddle the
+pairs (8 phash + 10 embedding, 7 found by both), 4 straddle the
 `image_random` split's folds and 3 straddle `patient_group`'s — materially
 the same order of magnitude for both, which is the point: patient-grouped
 splitting has no mechanism to catch a duplicate filed under two different
@@ -473,6 +475,49 @@ second run's numbers looked clean on their own. This is the same
 discipline applied to itself: a hypothesis this project wanted to be true
 doesn't get a pass on the checking that every other claim here got.
 
+### Reproducibility: why runs no longer overwrite each other
+
+`train.py` used to write every run to a fixed path,
+`artifacts/runs/<arm>_seed<seed>/metrics.json`. That is exactly how the
+*first* full-scale A/B run's per-seed data was lost: a later run reused
+the same arm/seed names (`A_seed42`, `B_seed43`, ...) and silently
+overwrote the earlier files. The two runs' *aggregate* numbers both made
+it into README.md/docs/notes.md before that happened, but the first run's
+raw per-seed JSON is gone — it now has to be cited from this document's
+own table rather than regenerated from disk, which is exactly the
+failure mode a reproducibility-focused project should not have.
+
+Fix: every run now writes to a unique directory —
+`<run_name>_<UTC timestamp>_<8-char sha256 of the resolved config>` — and
+appends one entry to `artifacts/runs/index.json` (arm, seed, config hash,
+timestamp, run directory, key metrics). Nothing is ever overwritten
+again. The remaining design question this raises: once two cohorts for
+the same arm can coexist (an old config's runs and a new config's runs),
+naively averaging every run ever found under an arm would silently blend
+incompatible cohorts into one meaningless number. `retinaprep.utils.
+load_current_run_metrics` resolves this by selecting, per arm, only the
+runs sharing that arm's *most recently recorded* config hash — older
+cohorts stay fully on disk and in `index.json` for provenance (and for
+exactly this kind of postmortem), they just drop out of the current
+headline aggregation. `report.py`, `experiment.py`'s results table, and
+`findings_charts.py`'s arm-results chart all read through this one
+function now, rather than three separate ad hoc directory scans that
+would each need to re-implement the same cohort logic (and would drift
+from each other if they didn't).
+
+The same investigation surfaced a second, unrelated reproducibility gap
+worth recording here rather than only in `docs/notes.md`:
+`configs/default.yaml` defaulted to `dataset.subsample_n: 2000` and
+`experiment.n_seeds: 1`, neither of which was ever the config actually
+used for a reported headline number (both used the full dataset and 5
+seeds, via CLI overrides that were never written back into the checked-in
+default). A clean checkout running the documented Quickstart commands
+with no overrides would therefore have silently reproduced a different,
+much smaller experiment than the one this document describes, with no
+error to flag the mismatch. The defaults now match what was actually
+measured; a fast local smoke test is an explicit opt-in override, not the
+silent default.
+
 ## 10. Limitations
 
 Stated plainly, because an interviewer will find these anyway and finding
@@ -513,7 +558,7 @@ them first is the better position:
    Because retinal imaging has a mechanical two-samples-per-subject
    structure (left/right eye) plus real bilateral disease correlation, so
    a naive split doesn't just risk leaking *a* correlated sample — it
-   leaks one specifically 42.3% of the time by construction (measured on
+   leaks one specifically 42.0% of the time by construction (measured on
    this dataset), and that leaked sample shares the true label 77.8% of
    the time (vs. 50.5% by chance). Many chest X-ray datasets have one film
    per patient per encounter, so the *image*-vs-*patient* distinction that
@@ -548,7 +593,7 @@ them first is the better position:
    patient ID, so two different IDs that are actually the same person's
    capture are treated as unrelated, and one copy can land in train while
    the other lands in test with zero warning. This project found exactly
-   this: 2 genuine cross-patient duplicate pairs (pixel-verified), which
+   this: 8 genuine cross-patient duplicate pairs (pixel-verified), which
    `patient_group_split` has no way to catch — only content-based
    deduplication does. It's the concrete argument in this codebase for why
    the pipeline needs both a grouped split *and* a dedupe stage, not just
@@ -632,7 +677,7 @@ them first is the better position:
     different, more tightly matched training-set cap): the gap dropped
     from +0.0173 (significant uncorrected, 5/5 sign-consistent) to +0.0079
     (p=0.29, 3/5 sign-consistent). My conclusion in that situation: the
-    *overlap* is still real and exact (42.3% of patients, unconditionally
+    *overlap* is still real and exact (42.0% of patients, unconditionally
     true regardless of any downstream model result), but this particular
     model/task/dataset/seed-count combination isn't reliably showing a
     detectable downstream effect — and I'd say so plainly rather than
@@ -652,7 +697,7 @@ them first is the better position:
     time, under nearly identical conditions (same nominal seeds, training
     set matched within 0.85% of the original), was enough to flip the
     result from "significant, unanimous direction" to "not significant,
-    3/5 agreeing." Every other number in this project — the 42.3%
+    3/5 agreeing." Every other number in this project — the 42.0%
     overlap, the 77.8% concordance, the 8 verified duplicate pairs, the
     0.7% reject rate — is either an exact count or independently
     cross-checked by eye. The one number that matters most for the

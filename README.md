@@ -2,9 +2,11 @@
 
 **A curation and leakage-audit pipeline for retinal fundus datasets.**
 
-Most published fundus-imaging results are reported on data that was split the
-wrong way. This project measures how much that costs, on a public dataset, with
-a fixed model and a controlled experiment.
+Splitting a fundus dataset by image instead of by patient lets a model see one
+eye in training and its fellow eye in test — the two are correlated by shared
+anatomy and disease, so the "unseen" test image isn't really unseen. This
+project measures exactly how much that costs, on a public dataset, with a
+fixed model and a controlled experiment.
 
 The model here is deliberately boring. The data path is the contribution.
 
@@ -12,15 +14,32 @@ The model here is deliberately boring. The data path is the contribution.
 
 ## Headline result
 
-**42.3% of patients (1422/3358) land on both sides of a naive image-level
+**42.0% of patients (1412/3358) land on both sides of a naive image-level
 split.** That number is exact — it's a count, not a statistic, and needs no
-significance test: under `image_random`, nearly half the dataset's patients
-have at least one eye in one fold and their fellow eye in another. Grouped
-splitting (`patient_group`) eliminates this outright — 0 patients cross a
-fold boundary, by construction, every time. This is the leakage the rest of
-this project measures the downstream cost of.
+significance test: under `image_random`, over 4 in 10 of the dataset's
+patients have at least one eye in one fold and their fellow eye in another.
+Grouped splitting (`patient_group`) eliminates this outright — 0 patients
+cross a fold boundary, by construction, every time. This is the leakage the
+rest of this project measures the downstream cost of.
+
+Reproduce this exact number from a clean `artifacts/` directory with:
+`python -m retinaprep ingest && python -m retinaprep split` (the checked-in
+`configs/default.yaml` defaults — full dataset, `label.strategy: keywords`
+— are what every number in this document was measured on; no override
+needed). Verified byte-identical across two independent clean runs. An
+earlier version of this document reported 42.3% (1422/3358) — that number
+was computed under the now-superseded `normal_column` label strategy before
+the switch to `keywords` (see the data card below); it was never re-derived
+after the switch and was stale. `keywords` is this project's validated
+default, so 42.0%/1412 is the correct, currently-reproducible figure.
 
 ### Downstream effect on a trained model (4 arms, 5 seeds, full dataset)
+
+Four arms, same model and seeds throughout: **A** trains on the raw data with
+the naive `image_random` split; **B** trains on the same raw data with the
+correct `patient_group` split; **C** adds quality curation on top of B's
+split; **D** adds deduplication on top of C. (Full definitions in the "All
+four arms" table below.)
 
 The single most honest result in this project: **the A-vs-B effect did not
 replicate cleanly on a second run.**
@@ -130,7 +149,7 @@ mean-difference result. Full numbers for both runs are in `docs/notes.md`.
 
 ### Why the effect is smaller than the overlap suggests
 
-42.3% patient overlap and a ~0.017 AUROC effect look like a mismatch until
+42.0% patient overlap and a ~0.017 AUROC effect look like a mismatch until
 you separate two different things: **patient overlap leaks the patient,
 not the label.** Among 3034 multi-eye patients, fellow eyes share the same
 binary (normal/abnormal) label only **77.8%** of the time — real
@@ -146,7 +165,7 @@ image-random split can make a fellow eye's *image* visible across the
 train/test boundary, but it can only make the fellow eye's *label*
 informative about 78% of the time. The measured effect being a modest
 0.017 AUROC rather than something dramatic isn't a contradiction of the
-42.3% overlap figure — it's what you'd expect once you account for what
+42.0% overlap figure — it's what you'd expect once you account for what
 the overlap actually hands the model. Full investigation, including two
 other candidate explanations tested and a training-curve analysis, is in
 `docs/notes.md`.
@@ -167,7 +186,7 @@ catch this.** It only protects against a single declared patient ID
 crossing a fold boundary — it has no way to know that two *different*
 declared IDs are actually the same underlying capture. Only content-based
 deduplication closes that gap. The money metric: of the 18 verified
-duplicate pairs found (8 by phash, 10 by embeddings, 6 found by both), 4
+duplicate pairs found (8 by phash, 10 by embeddings, 7 found by both), 4
 straddle the `image_random` split's folds and 3 straddle
 `patient_group`'s — materially the same order of magnitude for both,
 confirming patient-grouping has no mechanism to catch this leak at all.
@@ -194,10 +213,10 @@ enough generic macro-structure (dark background, circular field of view,
 similar framing) that a coarse perceptual hash collapses unrelated images
 together; this is a property of the imaging modality, not a bug in this
 implementation. Even at the strictest possible bucket (`hamming==0`,
-bit-identical hash), roughly half the flagged pairs were still false
-positives under direct pixel-difference verification — a hash match alone
-is not sufficient evidence of duplication in this domain, at any
-threshold, without a secondary check. Anyone building a dedupe step for
+bit-identical hash), the overwhelming majority (12 of 14) of flagged pairs
+were still false positives under direct pixel-difference verification — a
+hash match alone is not sufficient evidence of duplication in this domain,
+at any threshold, without a secondary check. Anyone building a dedupe step for
 fundus (or likely other structurally-homogeneous medical imaging) data
 should expect this and budget for verification, not just threshold
 tuning.
@@ -242,7 +261,7 @@ report   -> self-contained HTML QC report
 | Dataset | ODIR-5K (Ocular Disease Intelligent Recognition) |
 | Source | Kaggle: `andrewmvd/ocular-disease-recognition-odir5k` |
 | Collected by | Shanggong Medical Technology Co., Ltd., multiple centres in China |
-| Size | ~5,000 patients, colour fundus photographs of both eyes |
+| Size | ODIR-5K's nominal release is ~5,000 patients; this project's actual working set — `full_df.csv` joined against the images that exist in `preprocessed_images/` — has 3,358 patients (6,392 images). Roughly a third of the nominal patient count isn't present in the metadata/image files this project's adapter can resolve. That attrition is itself a curation fact worth stating plainly: every number in this document describes the 3,358-patient set, not the advertised ~5,000. |
 | Cameras | Mixed (Canon, Zeiss, Kowa) — resolutions vary widely |
 | Patient-level labels | N, D, G, C, A, H, M, O (8 classes) |
 | Task here | Binary: normal vs abnormal |

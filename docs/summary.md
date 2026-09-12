@@ -29,7 +29,7 @@ disease is unilateral. Seeing one eye gives the model a moderately reliable
 hint about the other, not a guarantee.
 
 **3. We also found a real data-integrity problem, independent of splitting:
-the same photograph filed under two different patient records**, in two
+the same photograph filed under two different patient records**, in eight
 separate instances. No amount of correct patient-level splitting catches
 this, because the two records claim to be different patients — it has to be
 caught by comparing images to each other directly.
@@ -58,9 +58,11 @@ too few times. We report both runs rather than the more favorable one.
    declared patient's own records.
 3. Re-run key comparisons more than once before calling a performance
    difference a real, reproducible finding.
-4. Treat quality and duplicate curation as integrity steps worth doing on
-   their own merits — in our data, they mostly didn't move accuracy either
-   way, and that's fine; that isn't why they're worth doing.
+4. Curation removed 0.7% of images, and its effect on accuracy could not
+   be measured, because the splitting procedure itself reshuffles enough
+   of the training set to swamp a change that small. The quality and
+   dedupe stages earn their place by catching ungradable images and
+   duplicated patients, not by moving a metric.
 
 ## Bottom line
 

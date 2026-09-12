@@ -7,6 +7,79 @@ written from evidence rather than reconstructed from memory.
 
 - [ ] Session 1: scaffold created, ingest + split + A/B experiment.
 
+## Provenance: which numbers can be regenerated from disk, and which can't
+
+Prompted by finding a stale headline number (the 42.3%/1422 patient-overlap
+figure, corrected above/below and in README.md) that had silently drifted
+from what `artifacts/` actually reproduces. Being explicit about which
+numbers in this project are artifact-sourced (regenerate them yourself,
+right now, with the command given) versus prose-sourced (a one-off
+investigation whose inputs are gone or were never saved) is itself part of
+the honesty this project is arguing for -- a number nobody can check is
+not more trustworthy for having a precise-looking decimal.
+
+**Artifact-sourced (regenerate yourself):**
+
+- Patient overlap (42.0%/1412/3358) and fellow-eye concordance (77.8% vs
+  50.5%) -- `python -m retinaprep ingest && python -m retinaprep split`
+  from a clean `artifacts/`, or `notebooks/findings_charts.py`.
+- The current 4-arm results table and the A-vs-B numbers from the *second*
+  (4-arm) run -- `artifacts/runs/index.json` + `artifacts/runs/*/metrics.json`,
+  or `python -m retinaprep experiment --arm <A|B|C|D>` to add a fresh
+  cohort (see the run-index note below).
+- Duplicate cluster count/cosine-similarity separation -- `python -m
+  retinaprep dedupe`, or `notebooks/findings_charts.py`'s live ResNet18
+  embedding pass.
+- Quality reject rate and rejects.csv reasons -- `python -m retinaprep quality`.
+- Every EDA figure in `notebooks/eda.py` -- computed directly from
+  `full_df.csv` / `manifest.parquet` each time it runs.
+
+**Prose-sourced (the investigation's inputs no longer exist as an
+artifact; the number is only as good as this document's record of it):**
+
+- The *first* full-scale A/B run's per-seed AUROC/AUPRC/Sens (cap=4473,
+  "Full-scale A/B run" section below) -- superseded on disk by the second
+  (4-arm, cap=4435) run, which reused the same run-directory names before
+  the unique-run-directory fix (see "artifacts/runs/ no longer overwrites"
+  below). Cited from this document's table in
+  `notebooks/findings_charts.py`'s `fig_ab_replication`.
+- The exploratory small-scale CPU run (subsample_n=800, epochs=4, "First
+  A/B training run" section below) -- already flagged in this document as
+  "not the headline number"; also not reproducible from current artifacts.
+- The train-set-overlap falsification test (69.2% real vs 69.4% random
+  control, "Why curation costs AUROC" (b)/(c) below) -- a report-only, ad
+  hoc investigation with no export step; nothing in the pipeline persists
+  arm-specific curated training pools or their overlap.
+- The original 400-patient fellow-eye cosine-similarity sample (mean
+  0.933, min 0.770, max 0.975) used to justify `embedding_cosine_min:
+  0.99` ("dedupe.py" section below) -- a one-off sampled check, superseded
+  by `findings_charts.py`'s full-population (n=3034) live recomputation,
+  which is artifact-sourced and should be treated as the current number.
+- The quality-vs-disease chi-square check on the 43 rejects (62.8% normal
+  vs 45.0% baseline, p=0.019, "Why curation costs AUROC" (a) below) -- ad
+  hoc, not behind a pipeline command.
+- The per-epoch training-curve analysis (peak-then-decline pattern, "Model
+  capacity" section below) -- read once off training logs, not from a
+  structured artifact.
+
+**Why this happened, and what changed so it's less likely to recur:**
+`configs/default.yaml` used to default to `dataset.subsample_n: 2000` and
+`experiment.n_seeds: 1` -- neither matches any reported headline number,
+which all used the full dataset and 5 seeds via undocumented CLI
+overrides. The checked-in defaults now match what every reported number
+actually used (full dataset, 5 seeds), so a clean `ingest`/`split`/
+`experiment` run with no overrides reproduces the real thing rather than
+a silently different small one. Separately, `train.py` used to write
+every run to `artifacts/runs/<arm>_seed<seed>/metrics.json` -- a fixed
+name that a later run with the same arm/seed silently overwrote (this is
+exactly how the first full-scale A/B run's per-seed data was lost). Each
+run now gets a unique directory (`<name>_<UTC timestamp>_<8-char config
+hash>`) and an entry in `artifacts/runs/index.json`; nothing overwrites,
+and `retinaprep.utils.load_current_run_metrics` selects, per arm, only
+the runs sharing that arm's most recently recorded config hash, so an
+old and a new cohort can coexist on disk without blending into one
+meaningless average.
+
 ## Why curation costs AUROC: three hypotheses tested, the flattering one lost
 
 The original writeup offered one hypothesis for C's -0.0146 AUROC vs B:
@@ -452,6 +525,20 @@ honest substitute for validation, per the same principle applied to the
 dedupe threshold investigation above.
 
 ## Why is the measured effect (0.017 AUROC) smaller than 42.3% patient overlap suggests?
+
+**[Correction, added later: the "42.3%" in this section's title and body was
+computed under the `normal_column` label strategy, before the switch to
+`keywords` (see "Label strategy default switched" above) -- it was never
+re-derived after the switch and went stale. Re-run from a clean
+`artifacts/` directory with the current default config: **42.0%
+(1412/3358)**, verified byte-identical across two independent runs. This
+does not change the substance of the investigation below (the dilution
+mechanism, and the 77.8%/50.5% concordance numbers, are unaffected -- they
+depend on the label column, not the split), only the specific overlap
+percentage quoted alongside it. Left as originally written below, with this
+note, rather than silently edited, so the correction itself is part of the
+record -- see README.md's headline section for where the corrected number
+now lives.]**
 
 Report-only investigation, no pipeline changes, no training re-run. Three
 candidate explanations tested against evidence, plus the duplicate-pairs
