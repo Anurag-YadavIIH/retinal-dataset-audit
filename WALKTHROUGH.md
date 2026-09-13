@@ -442,6 +442,83 @@ not in the direction curation is usually assumed to move it, and not by
 much. Full numbers, all four arms, both split strategies where
 applicable: `docs/notes.md` and `artifacts/results_table.md`.
 
+**Everything above this line describes results produced before a fix
+implemented in a later session — kept in full, not deleted, because it's
+the evidence the fix was built to respond to.** The next section reports
+what changed and why the numbers above are labelled "before-fix."
+
+### The split-then-curate fix: diagnosing a confound, then eliminating it
+
+The composition finding above (B and C's training sets sharing only
+69.2% of images despite matched size) was a diagnosis, not a fix — the
+underlying defect (`patient_group_split` recomputed fresh per arm,
+letting `StratifiedGroupKFold` reshuffle a large fraction of fold
+membership from any small pool change) stayed in the code, flagged in
+`docs/notes.md` as a design lesson for future work.
+
+**The fix**: split once on the raw pool (already what `retinaprep
+split` persists to disk), then for curated arms *filter* that fixed
+split down to whichever images survive curation, instead of
+recomputing. Every surviving image keeps the exact fold it was
+originally assigned; the only variable between arms becomes which
+images were removed, not how the remainder got reshuffled.
+`experiment.split_mode: persisted_base` is now the default (the old
+`recompute_per_arm` behaviour is kept, fully working, and selectable —
+the numbers above were produced with it and must stay reproducible on
+demand). One direct, deliberate consequence: **arm sizes are no longer
+matched to a common cap.** Matching size was exactly what forced the
+fresh per-arm recompute in the first place; under the fix, the size
+difference between arms *is* the treatment (how much curation actually
+removed), not a confound to correct for.
+
+**Verified before spending any GPU time on it**: under the fix, C's and
+D's training sets are provably subsets of B's — 100% overlap (as a
+fraction of the smaller, curated set), not 69.2%. This is a pure
+split/curation computation, no training involved, and it's the direct
+check that the fix does what it claims.
+
+**Prediction, stated in writing before re-running anything**: with ~43
+images removed out of ~4470 and fold membership now stable, C-vs-B
+should show a much smaller effect than the -0.0146 previously measured,
+because most of that original effect was resampling, not curation.
+
+**Re-ran all four arms, 5 seeds, full dataset, GPU, under the fix, at
+natural (uncapped) sizes.** Mean ± std across 5 seeds:
+
+| Arm | N train | AUROC | AUPRC | Sens@95%Spec |
+|---|---|---|---|---|
+| A (image_random) | 4473 | 0.8098 ± 0.0069 | 0.8567 ± 0.0052 | 0.4554 ± 0.0262 |
+| B (patient_group) | 4474 | 0.7915 ± 0.0099 | 0.8439 ± 0.0104 | 0.4327 ± 0.0304 |
+| C (quality-curated) | 4446 | 0.7944 ± 0.0094 | 0.8462 ± 0.0076 | 0.4020 ± 0.0142 |
+| D (quality+dedupe) | 4436 | 0.7856 ± 0.0135 | 0.8395 ± 0.0083 | 0.4191 ± 0.0158 |
+
+**The prediction held, on the identical statistical bar used above**
+(Bonferroni across the same 6-test family, alpha=0.00833):
+
+- **C vs B, AUROC: -0.0146 → +0.0029.** The one comparison in this
+  entire project that survived Bonferroni correction has disappeared
+  and flipped direction (p=0.0078, sign 5/5, before; p=0.6160, sign
+  3/5, after). AUPRC moves the same way (-0.0068 → +0.0023). This is
+  the significant result, not a disappointing one: the project
+  diagnosed a methodological artifact from indirect evidence (the
+  69.2%/69.4% overlap numbers) and predicted in writing what
+  eliminating it should do to the headline comparison, then it did
+  that.
+- **D vs B: null both before and after** — consistent with dedupe
+  removing too few images to plausibly move a metric either way,
+  regardless of split-recompute behaviour.
+- **One new, honest, unconfirmed lead**: Sens@95%Spec now shows a
+  sign-consistent (5/5) *decrease* for C vs B (-0.0307, p=0.0384
+  uncorrected) that does not survive Bonferroni correction. Reported as
+  exactly that — an uncorrected, sign-consistent signal worth more
+  seeds, not a finding — for the same reason the variance-instability
+  lead in the next section wasn't promoted either.
+
+Full per-seed values, the complete Bonferroni-adjusted CI table, and the
+A-vs-B third measurement this run also produced (a methodological
+caveat applies — see `docs/notes.md`) are in `docs/notes.md`, "Split-
+then-curate ordering fixed."
+
 ### Is the naive split unstable, not just optimistic?
 
 A second-sounding, independent argument for grouped splitting suggested

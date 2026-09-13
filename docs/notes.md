@@ -23,10 +23,17 @@ not more trustworthy for having a precise-looking decimal.
 - Patient overlap (42.0%/1412/3358) and fellow-eye concordance (77.8% vs
   50.5%) -- `python -m retinaprep ingest && python -m retinaprep split`
   from a clean `artifacts/`, or `notebooks/findings_charts.py`.
-- The current 4-arm results table and the A-vs-B numbers from the *second*
-  (4-arm) run -- `artifacts/runs/index.json` + `artifacts/runs/*/metrics.json`,
-  or `python -m retinaprep experiment --arm <A|B|C|D>` to add a fresh
-  cohort (see the run-index note below).
+- The current 4-arm results table (post split-then-curate fix,
+  `split_mode: persisted_base`, natural sizes) -- `artifacts/runs/index.json`
+  and `artifacts/runs/*/metrics.json`, or `python -m retinaprep
+  experiment --arm <A|B|C|D>` to add a fresh cohort (see the run-index
+  note below).
+  The *pre-fix* 4-arm table ("Arms C and D: full 4-arm run" below,
+  `split_mode: recompute_per_arm`, capped to 4435) is also still
+  reproducible, via `python -m retinaprep experiment --arm <A|B|C|D>
+  --set experiment.split_mode=recompute_per_arm` -- unlike the truly-lost
+  numbers below, this one only needs an explicit override, not
+  archaeology.
 - Duplicate cluster count/cosine-similarity separation -- `python -m
   retinaprep dedupe`, or `notebooks/findings_charts.py`'s live ResNet18
   embedding pass.
@@ -79,6 +86,122 @@ and `retinaprep.utils.load_current_run_metrics` selects, per arm, only
 the runs sharing that arm's most recently recorded config hash, so an
 old and a new cohort can coexist on disk without blending into one
 meaningless average.
+
+## Split-then-curate ordering fixed: the confound diagnosis, confirmed by eliminating it
+
+The "Why curation costs AUROC" investigation below diagnosed, but did
+not fix, a real defect: each arm recomputed `patient_group_split` fresh
+on its own curated pool, and `StratifiedGroupKFold` reshuffles fold
+membership aggressively on any pool change -- removing 43 images (0.7%)
+resampled ~31% of the training set, so B's and C's training sets shared
+only 69.2% of images despite matched size (69.4% for a random-removal
+control, confirming the mechanism was the split algorithm, not
+curation). That made the original C-vs-B comparison measure mostly
+split-algorithm sensitivity to perturbation, not curation's effect --
+flagged as a design lesson for future work, not implemented at the
+time.
+
+**The fix**: split once on the raw pool (already what `retinaprep split`
+persists), then for curated arms filter that fixed split down to
+whichever images survive curation, instead of recomputing. Implemented
+in `splits.py` (`load_persisted_split`, `filter_split_to_manifest`) and
+wired into `experiment.py` via `experiment.split_mode: persisted_base`
+(new default; `recompute_per_arm` kept, fully working, and selectable
+for reproducing the numbers below the fold). A direct consequence,
+stated as a design decision rather than left implicit: **arm sizes now
+differ naturally and are not capped back to a common size**
+(`match_arm_sizes` is ignored under this mode) -- matching size is
+exactly what forced the fresh per-arm recompute in the old design, so
+re-introducing it here would silently reintroduce the defect. Under
+`persisted_base`, the size difference between arms *is* the treatment
+(how much curation actually removed), not a confound to correct for.
+
+**Verification that the fix does what it's supposed to** (no training
+needed for this check -- pure split/curation logic against the real
+6392-image dataset):
+
+| | Old (recompute_per_arm) | New (persisted_base) |
+|---|---|---|
+| B train size | 4474 | 4474 |
+| C train size | 4435 (capped) / 4443 (natural) | 4446 |
+| D train size | 4435 (capped) / 4435 (natural) | 4436 |
+| B/C training-set overlap | 69.2% | **100%** (C is a strict subset of B) |
+| B/D training-set overlap | -- | **100%** (D is a strict subset of B) |
+
+C's and D's training sets are now provably subsets of B's -- every
+image that survives curation keeps the exact fold `retinaprep split`
+originally assigned it. 28 of the 43 quality-rejected images happened
+to land in B's train fold (4474 - 4446 = 28); the other 15 were in val
+or test. This is the number the fix was supposed to produce, and it
+does.
+
+**Prediction, stated before re-running anything**: with ~43 images
+removed out of ~4470 and fold membership now stable, C-vs-B should show
+a much smaller effect than the -0.0146 previously measured, because
+most of that original effect was resampling, not curation.
+
+**Re-ran all four arms, 5 seeds, full dataset, GPU, `split_mode:
+persisted_base`, natural (uncapped) sizes.** Results:
+
+| Arm | N train | AUROC | AUPRC | Sens@95%Spec |
+|---|---|---|---|---|
+| A (image_random) | 4473 | 0.8098 +/- 0.0069 | 0.8567 +/- 0.0052 | 0.4554 +/- 0.0262 |
+| B (patient_group) | 4474 | 0.7915 +/- 0.0099 | 0.8439 +/- 0.0104 | 0.4327 +/- 0.0304 |
+| C (quality-curated) | 4446 | 0.7944 +/- 0.0094 | 0.8462 +/- 0.0076 | 0.4020 +/- 0.0142 |
+| D (quality+dedupe) | 4436 | 0.7856 +/- 0.0135 | 0.8395 +/- 0.0083 | 0.4191 +/- 0.0158 |
+
+**The prediction held.** Same 6-test-family Bonferroni bar as the
+original analysis (alpha=0.05/6=0.00833, t_bonf(df=4)=4.851):
+
+| Comparison | Metric | Before (recompute_per_arm) | After (persisted_base) |
+|---|---|---|---|
+| C - B | AUROC | -0.0146, p=0.0078 (survives), sign 5/5 | **+0.0029, p=0.6160 (nowhere close), sign 3/5** |
+| C - B | AUPRC | -0.0068, p=0.1025, sign 0/5 | +0.0023, p=0.6275, sign 2/5 |
+| C - B | Sens@95 | +0.0041, p=0.7405, sign 3/5 | -0.0307, p=0.0384 (uncorrected only), sign **5/5** |
+| D - B | AUROC | -0.0116, p=0.1403, sign 1/5 | -0.0060, p=0.5062, sign 3/5 |
+| D - B | AUPRC | -0.0046, p=0.4265, sign 2/5 | -0.0044, p=0.5223, sign 2/5 |
+| D - B | Sens@95 | +0.0288, p=0.1456, sign 4/5 | -0.0135, p=0.3707, sign 1/5 |
+
+**AUROC/AUPRC C-vs-B: the one comparison in this entire project that
+survived Bonferroni correction has disappeared and flipped direction
+under the fix.** This is not a disappointing result -- it is the
+significant result. The project diagnosed a methodological artifact
+(split-algorithm sensitivity to perturbation, masquerading as a
+curation effect) from indirect evidence (the 69.2%/69.4% overlap
+numbers) and predicted in writing what eliminating it should do to the
+headline comparison; the prediction held, on the same statistical bar
+applied to every other claim here. D-vs-B stays a null under both
+designs, consistent with dedupe removing too few images to plausibly
+move a metric either way.
+
+**One new, honest, not-fully-confirmed lead surfaced by the fix**:
+Sens@95%Spec now shows a sign-consistent (5/5) *decrease* for C vs B
+(-0.0307, p=0.0384 uncorrected) that does not survive Bonferroni
+correction (0.0384 > 0.00833). Reported plainly as an uncorrected,
+sign-consistent, unconfirmed signal -- not promoted to a finding, for
+the same reason the earlier variance-instability lead wasn't: it hasn't
+cleared the bar this project holds everything else to. Worth watching
+with more seeds, not worth a headline claim at n=5.
+
+**A-vs-B, a third measurement, with a methodological caveat**: this run
+also re-measured A-vs-B (needed since the base split, and whether sizes
+are capped, both changed): AUROC diff +0.0183, t=2.73, p=0.0525
+(uncorrected), sign 4/5 -- between the first run's +0.0173 (p=0.037,
+5/5) and the second run's +0.0079 (p=0.29, 3/5). Not a clean third trial
+of the same design, stated plainly rather than glossed over: this run
+used natural, uncapped sizes (A=4473, B=4474) rather than either
+previous run's matched-size cap (4473 and 4435 respectively), so a
+difference in training-set size is now confounded with whatever
+between-run variation produced this number. Reported as a third data
+point in an ongoing pattern, not as resolving it.
+
+**Old numbers, kept, not deleted**: the pre-fix 4-arm table, all
+per-seed values, and the full Bonferroni-adjusted CI analysis are in
+"Arms C and D: full 4-arm run" below, produced under
+`experiment.split_mode: recompute_per_arm` (still fully working,
+selectable via config, and exactly reproducible) at `match_arm_sizes:
+true` (capped to 4435). Both README.md and WALKTHROUGH.md now present
+both sets of numbers, clearly labelled before-fix and after-fix.
 
 ## Why curation costs AUROC: three hypotheses tested, the flattering one lost
 
