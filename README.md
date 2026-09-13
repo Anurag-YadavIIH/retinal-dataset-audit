@@ -30,6 +30,8 @@ Grouped splitting (`patient_group`) eliminates this outright — 0 patients
 cross a fold boundary, by construction, every time. This is the leakage the
 rest of this project measures the downstream cost of.
 
+![42% of patients appear on both sides of a naive split](docs/figures/patient_overlap.png)
+
 Reproduce this exact number from a clean `artifacts/` directory with:
 `python -m retinaprep ingest && python -m retinaprep split` (the checked-in
 `configs/default.yaml` defaults — full dataset, `label.strategy: keywords`
@@ -56,6 +58,8 @@ replicate cleanly on a second run.**
 |---|---|---|---|
 | First (A/B matched only against each other) | +0.0173 | 0.037 | 5/5 seeds |
 | Second (A/B/C/D all matched together, size within 0.85% of the first) | +0.0079 | 0.29 | 3/5 seeds |
+
+![The leakage effect didn't replicate on a second run](docs/figures/ab_replication.png)
 
 Same nominal seeds both times. The training-set size changed by under 1%
 (matching against arms C/D, which didn't exist for the first run, pulled
@@ -168,6 +172,8 @@ patients, the fellow eye's label is actively uninformative — a
 unilaterally-diseased patient's second eye is, correctly, often labelled
 normal.
 
+![Fellow eyes agree 78% of the time -- not 100%](docs/figures/concordance.png)
+
 That 22.2% discordance dilutes the leakage ceiling directly: an
 image-random split can make a fellow eye's *image* visible across the
 train/test boundary, but it can only make the fellow eye's *label*
@@ -275,6 +281,15 @@ report   -> self-contained HTML QC report
 | Task here | Binary: normal vs abnormal |
 | Licence | *Check the Kaggle page and record the exact terms here before publishing results.* |
 | Known limitations | Class imbalance (55% abnormal under the default label rule); 324/3358 patients (9.6%) have only one usable eye in `preprocessed_images/`, so "two eyes per patient" cannot be assumed anywhere in the code; camera confound across centres; annotation quality varies; **quality scoring does not reliably catch uniform haze** (dense cataract / severe media opacity) — two essentially featureless, uniformly hazy images score 0.943 and 0.979, near the top of the entire dataset (see below) |
+
+At the extremes, the gradability score matches what these images actually
+look like — a basic sanity check with no ground-truth quality labels to
+validate against otherwise:
+
+![Low scores are genuinely degraded; high scores are genuinely clean](docs/figures/quality_examples.png)
+
+That said, the score has a real, specific blind spot away from the
+extremes, described next.
 
 **Quality scoring blind spot — uniform haze.** Two images with no visible
 vessel or disc structure at all (consistent with dense cataract or severe
