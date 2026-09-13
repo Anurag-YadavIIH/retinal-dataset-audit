@@ -12,6 +12,12 @@ fixed model and a controlled experiment.
 
 The model here is deliberately boring. The data path is the contribution.
 
+**Live reports:** [combined QC & findings report](https://anurag-yadaviih.github.io/retinal-dataset-audit/qc_report.html)
+(start here) &middot; [dataset EDA](https://anurag-yadaviih.github.io/retinal-dataset-audit/eda_report.html)
+&middot; [leakage-findings charts](https://anurag-yadaviih.github.io/retinal-dataset-audit/findings_report.html).
+Static snapshots as of this commit — see [Pipeline](#pipeline) below to
+regenerate them from the real dataset.
+
 ---
 
 ## Headline result
