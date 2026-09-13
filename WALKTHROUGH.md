@@ -318,9 +318,9 @@ inside the other method.
 **Final, real dataset-integrity finding**: 11 distinct duplicate clusters,
 22 images, across 8 unique cross-patient pairs — the same underlying
 capture filed under two *different* patient IDs, confirmed by near-zero
-pixel difference on every pair. **The money metric**: of the 18 verified
-pairs (8 phash + 10 embedding, 7 found by both), 4 straddle the
-`image_random` split's folds and 3 straddle `patient_group`'s — materially
+pixel difference on every pair. **The money metric**: of the 11 unique
+verified pairs (8 phash + 10 embedding, 7 found by both), 3 straddle the
+`image_random` split's folds and 2 straddle `patient_group`'s — materially
 the same order of magnitude for both, which is the point: patient-grouped
 splitting has no mechanism to catch a duplicate filed under two different
 patient IDs, since it only keeps a single declared ID's images together.

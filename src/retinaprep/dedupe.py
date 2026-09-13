@@ -139,6 +139,29 @@ def embedding_duplicates(
     return pairs
 
 
+def deduplicate_across_methods(tagged_pairs: list[tuple]) -> list[tuple[str, str]]:
+    """Collapse method-tagged candidate pairs (phash, embedding, ...) down to
+    unique real-world pairs.
+
+    A real duplicate pair either straddles a split boundary or it doesn't,
+    regardless of how many detection methods caught it -- feeding
+    method-tagged pairs straight into a count treats a pair found by both
+    phash and embedding as two events instead of one, inflating any
+    downstream aggregate (the money metric, or a "verified pairs total")
+    by exactly the number of doubly-caught pairs. Always call this before
+    counting or clustering across `verified_phash` + `embedding_pairs`
+    combined -- see docs/notes.md for the bug this was written to catch.
+    """
+    seen = set()
+    unique: list[tuple[str, str]] = []
+    for a, b, *_ in tagged_pairs:
+        key = (a, b) if a < b else (b, a)
+        if key not in seen:
+            seen.add(key)
+            unique.append(key)
+    return unique
+
+
 def cross_split_duplicate_count(pairs: list[tuple], split: dict) -> int:
     """The money metric: how many duplicate pairs straddle a given split's folds.
 
@@ -244,6 +267,17 @@ def run_dedupe(cfg: dict) -> None:
     all_verified = [(a, b, "phash", h) for a, b, h, _d in verified_phash] + [
         (a, b, "embedding", s) for a, b, s in embedding_pairs
     ]
+    # A pair found by both methods is one real duplicate, not two -- every
+    # cross-method aggregate below must run on the deduplicated union, not
+    # the raw concatenation. See deduplicate_across_methods's docstring.
+    unique_pairs = deduplicate_across_methods(all_verified)
+    logger.info(
+        "%d unique verified pairs (%d phash, %d embedding, %d found by both)",
+        len(unique_pairs),
+        len(verified_phash),
+        len(embedding_pairs),
+        len(verified_phash) + len(embedding_pairs) - len(unique_pairs),
+    )
 
     splits_dir = artifacts_dir / "splits"
     cross_split_report = {}
@@ -253,18 +287,16 @@ def run_dedupe(cfg: dict) -> None:
             continue
         with open(split_path) as fh:
             split = json.load(fh)
-        n_straddle = cross_split_duplicate_count(
-            [(a, b) for a, b, *_ in all_verified], split
-        )
+        n_straddle = cross_split_duplicate_count(unique_pairs, split)
         cross_split_report[split_name] = n_straddle
         logger.info(
             "Money metric: %d/%d verified duplicate pairs straddle the %s split",
             n_straddle,
-            len(all_verified),
+            len(unique_pairs),
             split_name,
         )
 
-    cluster_of = _assign_clusters([(a, b) for a, b, *_ in all_verified])
+    cluster_of = _assign_clusters(unique_pairs)
     dup_df = pd.DataFrame(
         {
             "image_path": manifest["image_path"],
@@ -281,7 +313,7 @@ def run_dedupe(cfg: dict) -> None:
         dup_path,
         int(dup_df["is_duplicate"].sum()),
         dup_df["cluster_id"].nunique(),
-        len(all_verified),
+        len(unique_pairs),
     )
 
     save_json(cross_split_report, artifacts_dir / "duplicates_cross_split.json")

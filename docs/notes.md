@@ -365,31 +365,57 @@ because phash's independent, pixel-structure-based signal doesn't care
 that this particular duplicate's two copies apparently differ enough in
 surface appearance (lighting/color grading) to fool a semantic embedding.
 **This is the concrete, not-just-theoretical proof that both methods are
-structurally necessary**: of the 8 confirmed pairs, phash alone would
-have found all 8 (verified directly -- see above) but embeddings alone
-would have found only 7, permanently blind to 3297/4542 the same way
-phash alone was blind to nothing here (phash caught every pair; embedding
-methods and phash fail in *different* directions on this modality, not
-interchangeable ones -- see WALKTHROUGH.md 7 for the connection to the
-phash false-positive finding, which is the same underlying pattern from
-the opposite side).
+structurally necessary**: embeddings alone would have found only 7 of the
+8 patient-pairs, permanently blind to 3297/4542, confirmed directly
+above. **Correction, caught in a later review pass: this section
+originally also claimed "phash alone would have found all 8" -- wrong,
+and not checked at patient-pair granularity before being written down,
+which is exactly the kind of unverified number this project exists to
+catch.** Phash's own image-pair count genuinely is 8, but those 8
+image-pairs cover only 5 of the 8 patient-pairs in full -- phash never
+verified any image-pair for 31/105, 1109/1166, or 4330/4552 (each a
+single-eye duplicate, so missing their one cluster means missing the
+whole patient-pair), confirmed by re-checking hamming distance and
+pixel difference directly against the real images rather than trusting
+the original count. Both methods have real, independent blind spots on
+this data, and neither's blind spot is visible from inside the other --
+see WALKTHROUGH.md §7 for the connection to the phash false-positive
+finding, which is the same underlying pattern from the opposite side.
 
-**Final result**, phash-verified (8 pairs) + embedding at the corrected
-0.99 threshold (10 pairs, 6 overlapping with phash): **11 distinct
-duplicate clusters, 22 images, across 8 unique patient-pairs** (3 pairs
-duplicated on both eyes, 5 on one eye). None are same-patient/fellow-eye;
-all are cross-patient -- the same real capture filed under two different
-declared patient IDs.
+**Final result**, phash-verified (8 image-pairs) + embedding at the
+corrected 0.99 threshold (10 image-pairs, 7 overlapping with phash):
+**11 distinct duplicate clusters, 22 images, across 8 unique
+patient-pairs** (3 pairs duplicated on both eyes, 5 on one eye). None
+are same-patient/fellow-eye; all are cross-patient -- the same real
+capture filed under two different declared patient IDs.
 
-**Money metric**: of these 18 verified pairs (8+10, double-counting the 6
-found by both methods -- the 11-cluster/22-image figure above is the
-deduplicated count), **4 straddle the `image_random` split's fold
-boundaries; 3 straddle `patient_group`'s.** Materially the same order of
-magnitude for both -- confirms directly what the design argument already
-predicted: patient-grouped splitting has no mechanism to catch a
-duplicate filed under two *different* patient IDs, since it only keeps a
-single declared ID's images together. This class of leakage is dedupe's
-job specifically, not splitting's.
+**Money metric**: of these 11 unique verified pairs (8 phash + 10
+embedding, 7 found by both), **3 straddle the `image_random` split's
+fold boundaries; 2 straddle `patient_group`'s.** Materially the same
+order of magnitude for both -- confirms directly what the design
+argument already predicted: patient-grouped splitting has no mechanism
+to catch a duplicate filed under two *different* patient IDs, since it
+only keeps a single declared ID's images together. This class of
+leakage is dedupe's job specifically, not splitting's.
+
+**Correction, caught in a later review pass: this section originally
+reported 4/3 straddling image_random/patient_group, from "18 verified
+pairs (8+10, double-counting the 6 found by both methods)."** The bug
+was in `run_dedupe`, not in this document alone: it fed the raw
+concatenation of phash-tagged and embedding-tagged pairs straight into
+the cross-split straddle count, so a pair found by *both* methods was
+counted as two straddling events instead of one, whenever it happened
+to straddle a boundary -- the same shape of error as the cluster-overlap
+count above (originally "6," corrected to "7"), except this instance had
+a real downstream consequence (an inflated persisted artifact) rather
+than being a documentation-only slip. Fixed by deduplicating
+method-tagged pairs into unique real-world pairs
+(`dedupe.deduplicate_across_methods`) before any cross-method count, with
+a regression test (`tests/test_dedupe.py`) constructing a pair found by
+both methods and asserting the straddle count treats it once.
+`artifacts/duplicates_cross_split.json` regenerated: **3** for
+`image_random`, **2** for `patient_group` -- confirmed by re-running
+`retinaprep dedupe` against the real dataset.
 
 **Prediction, stated before running arms C and D**: quality curation
 removes 43 images (0.7%) and deduplication removes at most 22 (0.3%, and

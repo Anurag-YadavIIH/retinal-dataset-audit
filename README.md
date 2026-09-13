@@ -185,9 +185,9 @@ deduplication stage, not just one: **patient-grouped splitting cannot
 catch this.** It only protects against a single declared patient ID
 crossing a fold boundary — it has no way to know that two *different*
 declared IDs are actually the same underlying capture. Only content-based
-deduplication closes that gap. The money metric: of the 18 verified
-duplicate pairs found (8 by phash, 10 by embeddings, 7 found by both), 4
-straddle the `image_random` split's folds and 3 straddle
+deduplication closes that gap. The money metric: of the 11 unique
+verified duplicate pairs (8 by phash, 10 by embeddings, 7 found by
+both), 3 straddle the `image_random` split's folds and 2 straddle
 `patient_group`'s — materially the same order of magnitude for both,
 confirming patient-grouping has no mechanism to catch this leak at all.
 
