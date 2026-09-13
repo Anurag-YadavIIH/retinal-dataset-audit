@@ -94,8 +94,22 @@ train:
 
 experiment:
   arms: [A, B, C, D]
-  # Force all arms to the same training-set size so curation is not
-  # confounded with dataset size.
+  # "persisted_base" (default, the fix): curated arms (C, D) filter the
+  # base patient_group split -- computed once on the raw pool by
+  # `retinaprep split` -- down to their own curated manifest, instead of
+  # recomputing the split fresh on the reduced pool. Every surviving
+  # image keeps its original fold; the only variable between arms is
+  # which images were removed. "recompute_per_arm" is the legacy
+  # behaviour this replaces (StratifiedGroupKFold reshuffles ~31% of the
+  # training set from even a small pool change, confounding curation
+  # with split-algorithm sensitivity -- docs/notes.md, "Why curation
+  # costs AUROC"), kept selectable because the existing writeup reports
+  # numbers produced this way.
+  split_mode: persisted_base
+  # Under split_mode=persisted_base this is ignored (arm sizes are
+  # intentionally left to differ -- see experiment._compute_train_size_cap).
+  # Only takes effect under split_mode=recompute_per_arm, where matching
+  # size is what isolates curation's effect from a dataset-size effect.
   match_arm_sizes: true
   # Seeds to run per arm when none is passed explicitly: [seed, seed+1, ...].
   # 5 is what every headline result in README.md/WALKTHROUGH.md used. For a

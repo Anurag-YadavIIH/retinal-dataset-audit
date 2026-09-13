@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 from sklearn.model_selection import StratifiedGroupKFold, train_test_split
 
@@ -97,6 +99,48 @@ def _group_holdout(
     keep_df = df.iloc[keep_pos].reset_index(drop=True)
     holdout_df = df.iloc[holdout_pos].reset_index(drop=True)
     return keep_df, holdout_df
+
+
+def load_persisted_split(cfg: dict, split_name: str) -> dict:
+    """Load a previously-computed split from artifacts/splits/<split_name>.json.
+
+    Written once by `retinaprep split`, on the raw/uncurated manifest --
+    this is the base split that filter_split_to_manifest filters down for
+    curated arms (see its docstring for why that matters). Fails loudly
+    if `retinaprep split` hasn't been run yet, rather than silently
+    falling back to a fresh recompute.
+    """
+    artifacts_dir = resolve_path(cfg, cfg["paths"]["artifacts"])
+    split_path = artifacts_dir / "splits" / f"{split_name}.json"
+    if not split_path.exists():
+        raise FileNotFoundError(
+            f"{split_path} does not exist -- run `retinaprep split` first to "
+            "produce the base split that curated arms filter down from."
+        )
+    with open(split_path) as fh:
+        return json.load(fh)
+
+
+def filter_split_to_manifest(base_split: dict, manifest: pd.DataFrame) -> dict:
+    """Filter a persisted split down to the images present in `manifest`.
+
+    The fix for the split-then-curate ordering defect (docs/notes.md,
+    "Why curation costs AUROC"): recomputing `patient_group_split` fresh
+    on a curated (reduced) pool lets `StratifiedGroupKFold` reshuffle a
+    large fraction of fold membership from even a small change to its
+    input -- removing 43 images (0.7%) changed ~31% of the training set
+    in the original measurement, confounding curation's effect with the
+    split algorithm's sensitivity to perturbation, not curation itself.
+
+    Filtering a fixed base split instead keeps every surviving image's
+    fold assignment exactly as it was on the raw pool -- the only
+    variable left between arms is which images were removed, which is
+    what a curation comparison is actually supposed to isolate. This
+    function only ever removes paths; it never reassigns a surviving
+    image to a different fold.
+    """
+    valid_paths = set(manifest["image_path"])
+    return {fold: [p for p in paths if p in valid_paths] for fold, paths in base_split.items()}
 
 
 def run_split(cfg: dict) -> None:

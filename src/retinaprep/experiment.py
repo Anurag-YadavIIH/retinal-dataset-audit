@@ -79,27 +79,83 @@ def build_curated_manifest(cfg: dict, curation: str) -> pd.DataFrame:
 
 
 def build_arm_split(cfg: dict, arm: str) -> tuple[pd.DataFrame, dict]:
-    """The (manifest, split) pair for one arm, split freshly on its own curated pool."""
-    from retinaprep.splits import image_random_split, patient_group_split
+    """The (manifest, split) pair for one arm.
+
+    `experiment.split_mode` controls how curated arms (C, D) get their
+    `patient_group` split:
+
+    - "persisted_base" (default -- the fix): load the base split computed
+      once on the raw pool by `retinaprep split`, then filter it down to
+      this arm's curated manifest (`splits.filter_split_to_manifest`), so
+      every surviving image keeps the fold it was originally assigned.
+      The only variable between B/C/D is which images curation removed,
+      not how the remaining ones got reshuffled.
+    - "recompute_per_arm" (legacy): `patient_group_split` recomputed
+      fresh on each arm's own curated pool. This is the split-then-curate
+      ordering defect documented in docs/notes.md ("Why curation costs
+      AUROC") -- kept, named, and fully working, because the project's
+      existing writeup reports numbers produced this way and those
+      numbers must stay reproducible on demand.
+
+    `image_random` (arm A only) is unaffected by either mode -- A is
+    never curated, so there is nothing to filter.
+    """
+    from retinaprep.splits import (
+        filter_split_to_manifest,
+        image_random_split,
+        load_persisted_split,
+        patient_group_split,
+    )
 
     spec = ARMS[arm]
     manifest = build_curated_manifest(cfg, spec["curation"])
-    if spec["split"] == "patient_group":
-        split = patient_group_split(manifest, cfg)
-    elif spec["split"] == "image_random":
-        split = image_random_split(manifest, cfg)
-    else:
+
+    if spec["split"] == "image_random":
+        return manifest, image_random_split(manifest, cfg)
+    if spec["split"] != "patient_group":
         raise ValueError(f"Unknown split {spec['split']!r} for arm {arm}")
+
+    split_mode = cfg["experiment"].get("split_mode", "persisted_base")
+    if split_mode == "persisted_base":
+        base_split = load_persisted_split(cfg, "patient_group")
+        split = filter_split_to_manifest(base_split, manifest)
+    elif split_mode == "recompute_per_arm":
+        split = patient_group_split(manifest, cfg)
+    else:
+        raise ValueError(f"Unknown experiment.split_mode {split_mode!r}")
     return manifest, split
 
 
 def _compute_train_size_cap(cfg: dict) -> int | None:
-    """Smallest natural train-set size across all FOUR configured arms.
+    """Smallest natural train-set size across all FOUR configured arms --
+    only meaningful under split_mode "recompute_per_arm".
 
-    Recomputes each arm's manifest and split fresh rather than trusting
-    whatever is on disk from a previous run, so the cap is always correct
-    for the current quality/dedupe state, not stale.
+    Under "persisted_base" (the fix), arms are DELIBERATELY left at their
+    natural, different sizes: matching size is exactly what forced a
+    fresh per-arm split recompute in the old design (StratifiedGroupKFold
+    reshuffles ~31% of the training set from even a small pool change,
+    docs/notes.md), which is the defect persisted_base exists to
+    eliminate. The size difference between arms *is* the treatment under
+    this mode (fewer images = what curation actually removed), not a
+    confound to correct for -- capping it back to a common size would
+    silently reintroduce the very resampling this mode exists to avoid.
+    Always returns None here, regardless of experiment.match_arm_sizes's
+    configured value.
+
+    Recomputes each arm's manifest and split fresh (under
+    "recompute_per_arm") rather than trusting whatever is on disk from a
+    previous run, so the cap is always correct for the current
+    quality/dedupe state, not stale.
     """
+    split_mode = cfg["experiment"].get("split_mode", "persisted_base")
+    if split_mode == "persisted_base":
+        if cfg["experiment"].get("match_arm_sizes", True):
+            logger.info(
+                "split_mode=persisted_base: ignoring experiment.match_arm_sizes "
+                "-- arm sizes are intentionally left to differ under this mode"
+            )
+        return None
+
     if not cfg["experiment"].get("match_arm_sizes", True):
         return None
 
