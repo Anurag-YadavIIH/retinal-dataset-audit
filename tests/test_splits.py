@@ -1,5 +1,7 @@
 """These two tests are the project's core claim, expressed as code."""
 
+from pathlib import Path
+
 import pytest
 
 from retinaprep.adapters.odir5k import build_manifest
@@ -9,6 +11,7 @@ from retinaprep.splits import (
     load_persisted_split,
     patient_group_split,
     patient_overlap,
+    site_group_split,
 )
 
 
@@ -104,3 +107,45 @@ def test_load_persisted_split_fails_loudly_when_missing(tmp_path):
     cfg = {"paths": {"artifacts": str(tmp_path)}}
     with pytest.raises(FileNotFoundError, match="retinaprep split"):
         load_persisted_split(cfg, "patient_group")
+
+
+def test_site_group_split_fails_loudly_when_site_labels_missing(
+    synthetic_fundus_dir, synthetic_cfg, tmp_path
+):
+    """No silent skip/fallback -- arm E needs site_labels.parquet to exist."""
+    manifest = build_manifest(synthetic_cfg)
+    with pytest.raises(FileNotFoundError, match="domain_shift_audit"):
+        site_group_split(manifest, synthetic_cfg)
+
+
+def test_site_group_split_groups_by_site_not_patient(synthetic_fundus_dir, synthetic_cfg):
+    """Two patients assigned the same site_label must never straddle a
+    fold boundary; site_group_split groups on site, not patient_id."""
+    import pandas as pd
+
+    manifest = build_manifest(synthetic_cfg)
+    artifacts_dir = Path(synthetic_cfg["paths"]["artifacts"])
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    # 4 synthetic "sites", each spanning several patients' images --
+    # deliberately NOT one site per patient, so a passing test actually
+    # exercises grouping by site rather than incidentally matching
+    # patient-level grouping.
+    paths = manifest["image_path"].tolist()
+    site_labels = pd.DataFrame(
+        {
+            "image_path": paths,
+            "site_label": [f"site_{i % 4}" for i in range(len(paths))],
+        }
+    )
+    site_labels.to_parquet(artifacts_dir / "site_labels.parquet", index=False)
+
+    split = site_group_split(manifest, synthetic_cfg)
+    site_of_path = site_labels.set_index("image_path")["site_label"]
+
+    fold_of_site: dict[str, set[str]] = {}
+    for fold, fold_paths in split.items():
+        for p in fold_paths:
+            fold_of_site.setdefault(site_of_path[p], set()).add(fold)
+    straddling = {site: folds for site, folds in fold_of_site.items() if len(folds) > 1}
+    assert not straddling, f"site(s) split across folds: {straddling}"

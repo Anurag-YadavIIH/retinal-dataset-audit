@@ -321,6 +321,126 @@ plainly, not acted on beyond the diagnosis in this pass.
 Full classifier result and confusion matrix: `artifacts/domain_shift_audit.json`
 (gitignored, regenerate with `python notebooks/domain_shift_audit.py`).
 
+### Follow-up A: verifying the classifier isn't reading fold structure
+
+Before trusting the 84% accuracy above, checked directly whether
+`build_split` (grouped on `patient_id` only, not stratified on
+`site_label`) could have concentrated sites by fold rather than
+producing genuinely held-out representation for each one. Reproduced
+the exact split deterministically (same seed, no retraining needed) and
+tabulated every site class's image count in every fold.
+
+**All 20 site classes appear in all three folds** -- no class is absent
+from test. Per-class train-fraction (target ~0.70, matching the
+train/val/test sizes 4473/640/1279) ranges 0.629 (site_8) to 0.825
+(site_16, a small 63-image class most exposed to random group-assignment
+noise); the rest sit closer to 0.65-0.73. Reasonably proportional, no
+site concentrated into a single fold. **The 84% accuracy is not an
+artifact of fold structure** -- every site had genuine held-out images
+to be evaluated against.
+
+### Follow-up B: arm E -- site-level splitting, the direct experiment
+
+The audit above diagnosed patient-level splitting as necessary but
+insufficient. The direct test: hold out entire sites and measure how
+much the site shortcut is worth.
+
+**`splits.site_group_split`**: groups on `site_label` (loaded from
+`artifacts/site_labels.parquet`, written once by
+`notebooks/domain_shift_audit.py`) instead of `patient_id`, same
+`StratifiedGroupKFold` mechanics as `patient_group_split` otherwise.
+Patient-level integrity comes free rather than needing separate logic:
+99.0% of two-eye patients share an identical raw resolution (and
+therefore site_label) across both eyes, established in the audit above
+-- grouping by site overwhelmingly keeps a patient's eyes together too.
+**Not a perfect guarantee, checked directly rather than assumed**:
+`patient_overlap` on the persisted `site_group` split reports **6**
+patients straddling train/val (vs 0 for `patient_group`) -- the
+~10 patients whose eyes landed in different site clusters (Follow-up A
+run's own log) can, and in 6 cases did, end up split across a site_group
+fold boundary. Small, real, and reported rather than glossed over.
+
+Wired into `experiment.py` as **arm E** (`curation: raw, split:
+site_group`), using the same persisted-split discipline as the item-1
+fix: `retinaprep split` computes and persists `site_group.json` once
+(only if `site_labels.parquet` already exists -- skipped with a log
+message otherwise, so the base two splits keep working for anyone who
+hasn't run the domain-shift audit), and arm E loads it directly, no
+recompute, no curation-driven filtering (E's pool is the raw manifest,
+same as B).
+
+**A caveat serious enough to state before the split sizes**: with only
+20 groups and a highly skewed size distribution (site_0 alone is 31% of
+the dataset), `StratifiedGroupKFold` had very little room to manoeuvre.
+**The val fold is a single site** (`site_2`, 402 images) **and the test
+fold is a single site** (`site_0`, 1982 images) -- not "one site
+dominates a mixed fold," but the fold *is* one site. Train=4008 (62.7%,
+short of the configured 70% target -- group-based splitting on 20
+unevenly-sized groups doesn't hit configured fractions precisely, the
+same caveat `patient_group_split` already carries, just more visible
+here with far fewer groups to work with).
+
+**Class balance shifts substantially as a direct, expected consequence
+of the entanglement measured above, not a bug in the split**: train
+47.3% normal, val 61.2% normal, test **37.0%** normal (63% abnormal) --
+because site correlates with diagnosis, holding out a site necessarily
+means holding out that site's own disease mix, which differs from the
+rest of the dataset's. This makes a same-scale head-to-head comparison
+against arm B's 55.0%-abnormal test set imperfect -- flagged plainly,
+not smoothed over.
+
+**Prediction, stated before running anything**: AUROC should drop
+substantially relative to arm B, and that drop is the measurement of
+the site shortcut. Seed-to-seed variance was also predicted to be
+higher than B's, since a single dominant site in the test fold gives
+the model much less genuinely varied held-out material per seed.
+
+**Ran arm E, 5 seeds, full dataset, same hyperparameters as every other
+arm.** Same 3-metric Bonferroni family as the original A-vs-B analysis
+(alpha=0.05/3=0.0167, t_bonf(df=4)=3.961):
+
+| Metric | E-B mean diff | t | p | 95% CI | Bonferroni CI | Sign | Survives |
+|---|---|---|---|---|---|---|---|
+| AUROC | -0.0557 | -6.70 | 0.00259 | [-0.0787,-0.0326] | [-0.0886,-0.0227] | 5/5 | **YES** |
+| AUPRC | +0.0023 | +0.41 | 0.70592 | [-0.0133,+0.0179] | [-0.0200,+0.0245] | 3/5 | no |
+| Sens@95%Spec | -0.0585 | -4.80 | 0.00867 | [-0.0923,-0.0246] | [-0.1068,-0.0102] | 5/5 | **YES** |
+
+**The prediction held, decisively.** AUROC drops -0.0557 (over 3x the
+original patient-level effect, +0.0173/+0.0079/+0.0183 across the
+three A-vs-B runs) and survives Bonferroni correction with a
+confidence interval that excludes zero even after correcting -- the
+cleanest, most statistically decisive result in this entire project.
+Sens@95%Spec shows the same pattern. **AUPRC does not** -- plausibly
+*because of*, not despite, the class-balance shift just flagged: AUPRC's
+precision baseline scales directly with test-set prevalence (63%
+abnormal here vs ~55% for B), while AUROC is a rank-based measure
+invariant to class-prior shift by construction. Read together, the
+three metrics' pattern is informative rather than contradictory: the two
+prevalence-insulated metrics (AUROC, and Sens@95%Spec at a fixed
+operating point) show a large, consistent, corrected-significant drop;
+the one prevalence-sensitive metric doesn't, for a specific, statable
+reason rather than an unexplained inconsistency.
+
+**Variance prediction: directionally right, not statistically
+confirmed** -- checked with Levene's test rather than eyeballed, the
+same discipline applied to the earlier (also-unconfirmed) naive-split
+variance lead. AUROC std: E=0.0194 vs B=0.0099 (1.96x), Levene p=0.451
+-- suggestive, not significant. AUPRC: 1.23x, p=0.893. Sens@95%Spec:
+0.86x (the *opposite* direction from predicted), p=0.736. Reported as
+exactly that: the AUROC ratio is directionally consistent with the
+prediction but doesn't clear significance at n=5, and Sens@95%Spec
+doesn't support it at all.
+
+**What this confirms**: the audit's diagnosis wasn't just a statistical
+association -- removing the ability to exploit it (by holding out
+entire sites) costs a model substantially more than removing patient
+overlap ever did. Patient-level splitting is necessary but not
+sufficient; this is the direct, measured demonstration of that claim,
+not just the entanglement evidence for it. **Resolution remains a proxy
+for camera, not the camera itself, throughout this entire result** --
+restated because it applies to arm E's site definition exactly as much
+as to the audit that produced it.
+
 ## Why curation costs AUROC: three hypotheses tested, the flattering one lost
 
 The original writeup offered one hypothesis for C's -0.0146 AUROC vs B:

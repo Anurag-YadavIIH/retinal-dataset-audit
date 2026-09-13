@@ -5,6 +5,31 @@
 
 ## 1. The claim
 
+The claim, stated as the hierarchy it turned out to be rather than the
+single number the project started with: **splitting by image leaks
+patients; splitting by patient leaks sites instead; only splitting by
+site isolates the disease signal.** Each level of grouping is
+necessary and, on its own, insufficient for the level above it. All
+three rungs are measured directly in this project, not asserted:
+
+1. **Image-level splitting leaks patients** — 42.0% of patients cross
+   a naive train/test boundary (§1 below, exact count).
+2. **Patient-level splitting leaks sites instead** — a classifier
+   recovers which clinic captured a *preprocessed* photo 84% of the
+   time, and site is entangled with diagnosis at p≈1e-16 (§5 and the
+   domain-shift audit in §9).
+3. **Site-level splitting (arm E) isolates the signal, at a measured
+   cost**: AUROC drops over 3x the size of the original patient-level
+   effect when entire sites are actually held out, the cleanest,
+   Bonferroni-surviving result in this project (§9).
+
+The rest of this section works through rung one in the detail it was
+originally measured in; rungs two and three get the same treatment in
+§9, once the machinery (splitting, curation, the experiment arms) that
+rung one motivated has been introduced. Read as one arc, not three
+separate findings: the project's central result is the hierarchy, not
+any single rung of it.
+
 Splitting a fundus dataset by image instead of by patient inflates measured
 model performance, because bilateral disease correlation and repeat-visit
 recapture mean the "unseen" test set is not actually unseen. This project
@@ -644,10 +669,61 @@ patient-grouped split, since that split was never designed to address
 this axis. **Patient-level splitting is necessary but not sufficient;
 site-level splitting (holding out whole sites, not just whole patients)
 is the stricter standard this dataset would need to fully rule a site
-confound out.** Not implemented here — diagnosed and stated as a design
-conclusion for future work, the same way the split-then-curate fix
-above started as a diagnosis before it became a fix. Full numbers,
-confusion matrix, and per-category chi-square table: `docs/notes.md`.
+confound out.**
+
+**Checked before trusting the 84%, not assumed**: `build_split` groups
+on `patient_id` only, not stratified on site — if sites happened to
+cluster by fold, part of the 84% could be fold structure rather than
+optics. Reproduced the split deterministically and tabulated every
+site's count per fold: **all 20 classes appear in all three folds**,
+train-fraction ranging 0.63–0.83 around the 0.70 target — reasonably
+proportional, no site concentrated into one fold. The result stands.
+
+**Then the direct experiment**: arm E holds out entire sites
+(`splits.site_group_split`, same persisted-split discipline as the
+item-1 fix). Patient-level integrity comes free — 99.0% of two-eye
+patients share one site, so grouping by site overwhelmingly keeps a
+patient's eyes together too — though not perfectly (6 patients straddle
+a fold boundary under `site_group` vs 0 under `patient_group`, checked
+directly). **A real caveat before the result**: with only 20 groups and
+`site_0` alone holding 31% of the dataset, the val fold ended up being
+a single site (402 images) and so did test (1982 images) — not one site
+dominating a mixed fold, the fold *is* one site, and its class balance
+(63% abnormal) differs substantially from train's (53%) as a direct
+consequence of the entanglement just measured, not a split bug.
+
+**Predicted before running anything: AUROC should drop substantially
+relative to arm B.** It did, decisively — the cleanest result in this
+project: AUROC **−0.0557** (over 3x the original patient-level effect),
+5/5 seeds, survives Bonferroni correction with a CI excluding zero even
+after correction (p=0.0026). Sens@95%Spec matches (−0.0585, p=0.0087,
+survives). AUPRC alone doesn't move (+0.0023, p=0.706) — plausibly
+*because of* the class-balance shift just flagged, not despite it:
+AUPRC's precision baseline scales with test prevalence, while AUROC and
+Sens@95%Spec are rank-based and prevalence-insulated by construction.
+Predicted higher seed-to-seed variance too; found a suggestive (1.96x)
+but not Levene-significant ratio for AUROC (p=0.451), no support at all
+for Sens@95%Spec (0.86x, the *opposite* direction) — reported as
+exactly that, not rounded up. Full per-metric table, confusion matrix,
+per-fold site/class-balance tables, and the per-category chi-square
+breakdown: `docs/notes.md`.
+
+**The hierarchy this project's central claim rests on is now measured
+at every rung, not just diagnosed at the top one.** Patient-level
+splitting is necessary but not sufficient; this arm is the direct
+demonstration of that, not just the statistical association behind it.
+
+**A process note worth including on its own terms**: the first attempt
+at the domain-shift classifier crashed *after* a 14-minute training run
+completed, on a downstream bug (the canonical manifest doesn't carry
+the original N/D/G/... columns; only `full_df.csv` does) that had
+nothing to do with training at all. The fix wasn't just correcting the
+bug — it was adding a checkpoint write immediately after the expensive
+part and before the cheap analysis that crashed, so the next bug in
+that cheap part (there wasn't one, but there could have been) would
+never again cost re-running the 14 minutes to find out. Designing
+around where a failure is expensive, not just fixing the failure
+itself, is worth a sentence here.
 
 ## 10. Limitations
 
@@ -676,13 +752,15 @@ them first is the better position:
   or duplication labels** (none exist for this dataset). The uniform-haze
   blind spot in quality scoring (§6) is a concrete, known instance of this
   limitation, not a hypothetical one.
-- **No held-out camera/site split, and this is no longer a hypothetical
-  gap.** The cross-camera audit above confirms a site confound exists
-  (chi2=115.18, p=8.8e-16 against the patient-level diagnosis flag,
-  significant for 6 of 8 individual categories) — patient-level
-  splitting does not address it, since it groups by patient, not by
-  site. Diagnosed and reported, not fixed: this project does not
-  implement a site-level split.
+- **Site-level splitting (arm E) exists but isn't the default.** The
+  cross-camera audit confirms a site confound (chi2=115.18, p=8.8e-16
+  against diagnosis) and arm E measures its cost directly (AUROC drops
+  0.0557 when entire sites are held out, Bonferroni-significant) — but
+  the main experiment matrix (arms A-D) still splits by patient, not
+  site, and arm E's own test fold is a single dominant site rather than
+  a genuinely varied held-out sample (see §9), so it demonstrates the
+  effect exists rather than giving a clean, generalisable estimate of a
+  production model's site-level generalisation gap.
 
 ---
 

@@ -35,6 +35,12 @@ ARMS = {
     "B": {"curation": "raw", "split": "patient_group"},
     "C": {"curation": "quality", "split": "patient_group"},
     "D": {"curation": "quality+dedupe", "split": "patient_group"},
+    # roadmap item 2 follow-up: holds out entire putative sites (camera/
+    # centre proxy, notebooks/domain_shift_audit.py) rather than
+    # patients. Requires artifacts/splits/site_group.json (retinaprep
+    # split, after running the domain-shift audit once to derive
+    # site_labels.parquet) -- see splits.site_group_split.
+    "E": {"curation": "raw", "split": "site_group"},
 }
 
 
@@ -97,8 +103,10 @@ def build_arm_split(cfg: dict, arm: str) -> tuple[pd.DataFrame, dict]:
       existing writeup reports numbers produced this way and those
       numbers must stay reproducible on demand.
 
-    `image_random` (arm A only) is unaffected by either mode -- A is
-    never curated, so there is nothing to filter.
+    `image_random` (arm A only) and `site_group` (arm E only) are
+    unaffected by either mode -- neither is ever curated, so there is
+    nothing to filter; E always loads the persisted split directly
+    (same persisted-split discipline as the fix, applied uniformly).
     """
     from retinaprep.splits import (
         filter_split_to_manifest,
@@ -112,6 +120,8 @@ def build_arm_split(cfg: dict, arm: str) -> tuple[pd.DataFrame, dict]:
 
     if spec["split"] == "image_random":
         return manifest, image_random_split(manifest, cfg)
+    if spec["split"] == "site_group":
+        return manifest, load_persisted_split(cfg, "site_group")
     if spec["split"] != "patient_group":
         raise ValueError(f"Unknown split {spec['split']!r} for arm {arm}")
 

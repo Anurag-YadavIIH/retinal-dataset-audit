@@ -4,11 +4,25 @@ Repository: retinal-dataset-audit · Package: retinaprep
 
 **A curation and leakage-audit pipeline for retinal fundus datasets.**
 
-Splitting a fundus dataset by image instead of by patient lets a model see one
-eye in training and its fellow eye in test — the two are correlated by shared
-anatomy and disease, so the "unseen" test image isn't really unseen. This
-project measures exactly how much that costs, on a public dataset, with a
-fixed model and a controlled experiment.
+This project's central finding is a hierarchy, not a single number:
+
+- **Splitting by image leaks patients.** 42% of patients cross a naive
+  train/test boundary — a model can partly be tested on patients it has
+  already seen.
+- **Splitting by patient — the standard fix — leaks sites instead.** A
+  classifier recovers which clinic captured an image 84% of the time
+  from the *preprocessed* photo alone, and site is entangled with
+  diagnosis (p≈1e-15). Patient-grouping was never designed to catch
+  this axis, so it doesn't.
+- **Only splitting by site isolates the disease signal**, at a real,
+  measured cost: AUROC drops by over 3x the original patient-level
+  effect when entire sites are actually held out.
+
+Each level of grouping is necessary and, on its own, insufficient for
+the level above it. That is a more general and more useful claim than
+"don't split by image," which is where this project started — the
+patient-level leakage work below is the first rung, not the whole
+story.
 
 The model here is deliberately boring. The data path is the contribution.
 
@@ -20,7 +34,7 @@ regenerate them from the real dataset.
 
 ---
 
-## Headline result
+## Rung 1: image-level splitting leaks patients
 
 **42.0% of patients (1412/3358) land on both sides of a naive image-level
 split.** That number is exact — it's a count, not a statistic, and needs no
@@ -28,7 +42,9 @@ significance test: under `image_random`, over 4 in 10 of the dataset's
 patients have at least one eye in one fold and their fellow eye in another.
 Grouped splitting (`patient_group`) eliminates this outright — 0 patients
 cross a fold boundary, by construction, every time. This is the leakage the
-rest of this project measures the downstream cost of.
+rest of this section measures the downstream cost of — but it is rung one
+of three; see "Cross-camera domain-shift audit" below for rungs two and
+three.
 
 ![42% of patients appear on both sides of a naive split](docs/figures/patient_overlap.png)
 
@@ -295,7 +311,7 @@ tuning.
 
 ---
 
-## Cross-camera domain-shift audit
+## Rungs 2 and 3: cross-camera domain-shift audit, and site-level splitting
 
 ODIR-5K mixes Canon, Zeiss and Kowa across several Chinese centres, with
 no explicit camera/site column. Raw image resolution (before this
@@ -309,12 +325,18 @@ groups, consolidated (groups under 50 images) into **20 final site
 classes**. 99.0% of two-eye patients share an identical raw resolution
 across both eyes — this proxy is overwhelmingly a per-patient property.
 
+### Rung 2: patient-level splitting leaks sites instead
+
 **The test that matters**: a ResNet18 trained on the *already-resized*
 512x512 images (not the raw ones) to predict site, patient-grouped
 split so a fellow eye can't hand it a shortcut. **Test accuracy 0.8397
 against a 0.2932 majority baseline.** Since every image was already the
 same size, this can't be about pixel dimensions — the signal survives
-the resize this project's whole pipeline runs on.
+the resize this project's whole pipeline runs on. Checked directly, not
+assumed: every one of the 20 site classes appears in all three folds
+with roughly proportional representation (0.63–0.83 train-fraction,
+target 0.70), so this result isn't fold structure masquerading as a
+finding — see `docs/notes.md` for the full per-class table.
 
 **Then, does site correlate with diagnosis?** Patient-level chi-square
 against the genuinely patient-level `N` flag: **chi2=115.18,
@@ -323,15 +345,51 @@ hypertensive retinopathy, glaucoma, cataract, myopia, and "other" are
 all highly significant (p<0.005); only age-related macular degeneration
 is not (p=0.12).
 
-**What this means**: patient-level splitting (this project's entire
-design) stops a model memorising one patient's fellow eye, but does
-nothing to stop it learning site-correlated shortcuts shared across
-many different patients from the same centre — fully compatible with a
-correct, patient-grouped split, since that split was never designed to
-address this axis. **Patient-level splitting is necessary but not
-sufficient; site-level splitting is the stricter standard this dataset
-would need to fully rule a site confound out.** Diagnosed, not fixed —
-full numbers, confusion matrix, and the per-category table are in
+### Rung 3: site-level splitting, arm E — the direct experiment
+
+Diagnosis alone leaves a question open: how much does the site shortcut
+actually cost a trained model? **Arm E** holds out entire sites
+(`experiment.split_mode`'s persisted-split discipline, same as the
+item-1 fix — `retinaprep split` persists `site_group.json` once).
+Patient-level integrity comes free: since 99.0% of two-eye patients
+share one site, grouping by site overwhelmingly keeps a patient's eyes
+together too — though not perfectly (6 patients straddle a fold
+boundary under `site_group`, vs 0 under `patient_group`; checked
+directly, not assumed).
+
+**A real caveat, stated before the result**: with only 20 groups and
+one (`site_0`) holding 31% of the dataset, the val fold ended up being
+a *single site* (402 images) and so did the test fold (1982 images) —
+not one site dominating a mixed fold, but the fold *is* one site. Test
+set class balance (63% abnormal) differs substantially from train's
+(53%) as a direct, expected consequence of the entanglement just
+measured, not a bug in the split.
+
+**Predicted before running anything**: AUROC should drop substantially
+relative to arm B — that drop is the site shortcut's price.
+
+| Metric | E − B | p | Survives Bonferroni (3-test family) |
+|---|---|---|---|
+| AUROC | **−0.0557** | 0.0026 | **Yes** — Bonferroni CI excludes zero |
+| AUPRC | +0.0023 | 0.706 | No |
+| Sens@95%Spec | **−0.0585** | 0.0087 | **Yes** |
+
+**The prediction held, decisively — the cleanest, most statistically
+decisive result in this project.** AUROC drops over 3x the size of the
+original patient-level effect, 5/5 seeds agreeing, surviving Bonferroni
+correction with a confidence interval that excludes zero even after
+correcting. AUPRC alone doesn't move, plausibly *because* — not despite
+— the class-balance shift: AUPRC's precision baseline scales with test
+prevalence, while AUROC and Sens@95%Spec (rank-based, prevalence-
+insulated) both show the drop consistently. Predicted higher seed-to-
+seed variance too; found a suggestive (1.96x) but not Levene-significant
+ratio for AUROC, no support for Sens@95%Spec — reported as exactly
+that, not rounded up to a confirmed finding.
+
+**What this confirms**: patient-level splitting is necessary but not
+sufficient — this is the direct, measured demonstration of that claim,
+not just the statistical association behind it. Full statistics,
+confusion matrix, and per-fold site/class-balance tables:
 `docs/notes.md` and `WALKTHROUGH.md`.
 
 ---
@@ -537,7 +595,7 @@ Deliberately not built yet. Listed so the scope is honest rather than padded.
 - [ ] DICOM PHI stripping and burned-in patient-text detection on the image itself
 - [x] Cross-camera domain shift audit via a site classifier — done, see below
 - [ ] EyePACS adapter to demonstrate the adapter layer generalises
-- [ ] Site-level splitting, motivated directly by the audit above
+- [x] Site-level splitting (arm E), motivated directly by the audit above — done, see "Rungs 2 and 3" above
 
 ---
 

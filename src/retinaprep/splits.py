@@ -84,6 +84,70 @@ def patient_group_split(manifest: pd.DataFrame, cfg: dict) -> dict:
     }
 
 
+def site_group_split(manifest: pd.DataFrame, cfg: dict) -> dict:
+    """Grouped split on the derived site_label (not patient_id): entire
+    putative sites (camera/centre proxies, see notebooks/domain_shift_audit.py)
+    are held out together, stratified on label same as patient_group_split.
+
+    Patient-level integrity comes free rather than needing extra logic:
+    99.0% of two-eye patients share an identical raw resolution (and
+    therefore site_label) across both eyes (docs/notes.md), so grouping
+    by site overwhelmingly keeps a patient's eyes together too. Not a
+    perfect guarantee -- verified directly (not assumed) in
+    run_split's overlap report below, since the ~10 patients whose eyes
+    landed in different site clusters could in principle straddle a
+    site_group fold boundary.
+
+    Requires artifacts/site_labels.parquet (written by
+    notebooks/domain_shift_audit.py) -- fails loudly if it's missing
+    rather than silently skipping this split.
+    """
+    from retinaprep.config import resolve_path
+
+    artifacts_dir = resolve_path(cfg, cfg["paths"]["artifacts"])
+    site_labels_path = artifacts_dir / "site_labels.parquet"
+    if not site_labels_path.exists():
+        raise FileNotFoundError(
+            f"{site_labels_path} does not exist -- run "
+            "`python notebooks/domain_shift_audit.py` first to derive site labels."
+        )
+    site_labels = pd.read_parquet(site_labels_path)
+    manifest = manifest.merge(site_labels, on="image_path", how="inner")
+
+    split_cfg = cfg["split"]
+    test_frac = split_cfg["test_frac"]
+    val_frac = split_cfg["val_frac"]
+    stratify_col = split_cfg["stratify_on"]
+    seed = cfg["seed"]
+    group_col = "site_label"
+
+    manifest = manifest.reset_index(drop=True)
+    train_val_df, test_df = _group_holdout(manifest, test_frac, stratify_col, group_col, seed)
+
+    remaining_val_frac = val_frac / (1.0 - test_frac)
+    train_df, val_df = _group_holdout(
+        train_val_df, remaining_val_frac, stratify_col, group_col, seed
+    )
+
+    for name, df in [("train", train_df), ("val", val_df), ("test", test_df)]:
+        balance = df[stratify_col].value_counts(normalize=True).sort_index().round(3).to_dict()
+        sites = sorted(df[group_col].unique())
+        logger.info(
+            "site_group %s fold: %d rows, %d sites %s, class balance (label -> fraction) %s",
+            name,
+            len(df),
+            df[group_col].nunique(),
+            sites,
+            balance,
+        )
+
+    return {
+        "train": train_df["image_path"].tolist(),
+        "val": val_df["image_path"].tolist(),
+        "test": test_df["image_path"].tolist(),
+    }
+
+
 def _group_holdout(
     df: pd.DataFrame, holdout_frac: float, stratify_col: str, group_col: str, seed: int
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -144,7 +208,13 @@ def filter_split_to_manifest(base_split: dict, manifest: pd.DataFrame) -> dict:
 
 
 def run_split(cfg: dict) -> None:
-    """Write artifacts/splits/{image_random,patient_group}.json and print an overlap report."""
+    """Write artifacts/splits/{image_random,patient_group,site_group}.json
+    and print an overlap report. site_group is included only if
+    artifacts/site_labels.parquet already exists (written by
+    notebooks/domain_shift_audit.py) -- skipped with a clear log message,
+    not silently, if it doesn't, so the base two splits keep working for
+    anyone who hasn't run that analysis.
+    """
     set_global_seed(cfg["seed"])
 
     artifacts_dir = resolve_path(cfg, cfg["paths"]["artifacts"])
@@ -157,6 +227,14 @@ def run_split(cfg: dict) -> None:
         "image_random": image_random_split(manifest, cfg),
         "patient_group": patient_group_split(manifest, cfg),
     }
+
+    if (artifacts_dir / "site_labels.parquet").exists():
+        splits["site_group"] = site_group_split(manifest, cfg)
+    else:
+        logger.info(
+            "artifacts/site_labels.parquet not found -- skipping site_group split "
+            "(run notebooks/domain_shift_audit.py first to enable it)"
+        )
 
     for name, split in splits.items():
         save_json(split, splits_dir / f"{name}.json")

@@ -154,6 +154,35 @@ def build_split(manifest: pd.DataFrame, seed: int) -> dict:
     }
 
 
+def fold_site_balance(manifest: pd.DataFrame, split: dict) -> dict:
+    """Per-fold image count for every site class, and each class's
+    train-fraction -- the check for whether the classifier could be
+    reading fold structure rather than optics. build_split groups by
+    patient_id only (not stratified on site_label), so an imbalance
+    here would be a real, checkable risk, not assumed away."""
+    label_of_path = manifest.set_index("image_path")["site_label"]
+    table = {}
+    for fold, paths in split.items():
+        counts = label_of_path.loc[paths].value_counts()
+        table[fold] = counts.to_dict()
+
+    all_classes = sorted(manifest["site_label"].unique())
+    per_class_train_fraction = {}
+    for c in all_classes:
+        counts_by_fold = {fold: table[fold].get(c, 0) for fold in split}
+        total = sum(counts_by_fold.values())
+        per_class_train_fraction[c] = counts_by_fold["train"] / total if total else None
+        if counts_by_fold["test"] == 0:
+            logger.warning(
+                "Site class %r has ZERO images in the test fold -- its recall "
+                "cannot be evaluated and majority-baseline/accuracy numbers "
+                "should be read with that in mind.",
+                c,
+            )
+
+    return {"counts_per_fold": table, "per_class_train_fraction": per_class_train_fraction}
+
+
 def train_site_classifier(manifest: pd.DataFrame, split: dict, class_names: list[str]) -> dict:
     """ResNet18, new head, predicting site_label from the PREPROCESSED
     (512x512-resized) image -- not the raw one. If it succeeds here, the
@@ -322,9 +351,20 @@ def main() -> None:
     class_names = sorted(manifest["site_label"].unique(), key=lambda c: (c == "Other", c))
     logger.info("Site clusters: %s", cluster_report)
 
+    # Persisted so splits.site_group_split (arm E, roadmap item 2
+    # follow-up) can group on site without recomputing the DBSCAN
+    # clustering -- the same "split once, persist it" discipline as the
+    # rest of this project's splits.
+    site_labels_path = ARTIFACTS / "site_labels.parquet"
+    manifest[["image_path", "site_label"]].to_parquet(site_labels_path, index=False)
+    logger.info("Wrote %s", site_labels_path)
+
     split = build_split(manifest[["image_path", "patient_id", "site_label"]], SEED)
     n_train, n_val, n_test = len(split["train"]), len(split["val"]), len(split["test"])
     logger.info("Split sizes: train=%d val=%d test=%d", n_train, n_val, n_test)
+
+    balance_report = fold_site_balance(manifest, split)
+    logger.info("Per-fold site-class balance: %s", balance_report["counts_per_fold"])
 
     train_result = train_site_classifier(manifest, split, class_names)
 
@@ -353,6 +393,7 @@ def main() -> None:
 
     result = {
         "cluster_report": cluster_report,
+        "fold_site_balance": balance_report,
         "classifier_result": train_result,
         "diagnosis_report": diagnosis_report,
     }
