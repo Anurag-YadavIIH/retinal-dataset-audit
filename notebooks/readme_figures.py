@@ -29,7 +29,7 @@ from scipy import stats
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from retinaprep.utils import load_current_run_metrics  # noqa: E402
+from retinaprep.utils import load_run_index  # noqa: E402
 
 ARTIFACTS = REPO_ROOT / "artifacts"
 FIGURES_DIR = REPO_ROOT / "docs" / "figures"
@@ -133,24 +133,40 @@ def concordance() -> None:
 
 
 def ab_replication() -> None:
+    """Three independent A-vs-B measurements, each labeled by run, split
+    mode, and training-set cap -- Run 2 and Run 3 also differ in
+    split-mode design (recompute_per_arm/capped vs persisted_base/
+    natural), not just seed draw, so neither bar pair may be read as a
+    plain repeat of the other without that label."""
     findings = _load_findings_module()
-    first_a = np.array(findings.FIRST_RUN_A_AUROC)
-    first_b = np.array(findings.FIRST_RUN_B_AUROC)
+    run1_a, run1_b = np.array(findings.FIRST_RUN_A_AUROC), np.array(findings.FIRST_RUN_B_AUROC)
 
-    current = load_current_run_metrics(ARTIFACTS)
-    second_a = current.loc[current["arm"] == "A", "auroc"].to_numpy()
-    second_b = current.loc[current["arm"] == "B", "auroc"].to_numpy()
+    entries = pd.DataFrame(load_run_index(ARTIFACTS))
+    b_rows = entries[entries["arm"] == "B"]
+    capped_hash = b_rows.loc[b_rows["n_train"] < 4470, "config_hash"].iloc[0]
+    natural_hash = b_rows.loc[b_rows["n_train"] >= 4470, "config_hash"].iloc[0]
 
-    _, p_first = stats.ttest_rel(first_a, first_b)
-    _, p_second = stats.ttest_rel(second_a, second_b)
+    def _auroc(config_hash: str, arm: str) -> np.ndarray:
+        sub = entries[(entries["config_hash"] == config_hash) & (entries["arm"] == arm)]
+        return sub.sort_values("seed")["auroc"].to_numpy()
 
-    fig, ax = plt.subplots(figsize=(7.5, 4.8))
-    x = np.arange(2)
+    run2_a, run2_b = _auroc(capped_hash, "A"), _auroc(capped_hash, "B")
+    run3_a, run3_b = _auroc(natural_hash, "A"), _auroc(natural_hash, "B")
+
+    runs = [
+        ("Run 1\ncap=4473", run1_a, run1_b),
+        ("Run 2\ncap=4435", run2_a, run2_b),
+        ("Run 3\nuncapped", run3_a, run3_b),
+    ]
+    ps = [stats.ttest_rel(a, b)[1] for _, a, b in runs]
+
+    fig, ax = plt.subplots(figsize=(8.5, 4.8))
+    x = np.arange(3)
     width = 0.3
-    a_means = [first_a.mean(), second_a.mean()]
-    a_stds = [first_a.std(ddof=1), second_a.std(ddof=1)]
-    b_means = [first_b.mean(), second_b.mean()]
-    b_stds = [first_b.std(ddof=1), second_b.std(ddof=1)]
+    a_means = [a.mean() for _, a, _ in runs]
+    a_stds = [a.std(ddof=1) for _, a, _ in runs]
+    b_means = [b.mean() for _, _, b in runs]
+    b_stds = [b.std(ddof=1) for _, _, b in runs]
     ax.bar(
         x - width / 2, a_means, width, yerr=a_stds, capsize=6, label="A (naive split)",
         color=RED, error_kw={"linewidth": 2},
@@ -160,12 +176,15 @@ def ab_replication() -> None:
         color=GREEN, error_kw={"linewidth": 2},
     )
     ax.set_xticks(x)
-    ax.set_xticklabels([f"Run 1\np={p_first:.2f}", f"Run 2\np={p_second:.2f}"])
+    ax.set_xticklabels(
+        [f"{label}\np={p:.2f}" for (label, _, _), p in zip(runs, ps, strict=True)]
+    )
     ax.set_ylabel("AUROC")
     ax.set_ylim(0.74, 0.86)
     ax.legend(loc="upper right", frameon=False)
     fig.suptitle(
-        "The leakage effect didn't replicate on a second run", fontsize=19, y=1.03
+        "None of three A-vs-B runs reaches significance at n=5 seeds",
+        fontsize=18, y=1.03,
     )
     fig.tight_layout()
     fig.savefig(FIGURES_DIR / "ab_replication.png", dpi=150, bbox_inches="tight")

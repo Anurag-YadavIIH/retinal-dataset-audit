@@ -131,9 +131,18 @@ needed for this check -- pure split/curation logic against the real
 C's and D's training sets are now provably subsets of B's -- every
 image that survives curation keeps the exact fold `retinaprep split`
 originally assigned it. 28 of the 43 quality-rejected images happened
-to land in B's train fold (4474 - 4446 = 28); the other 15 were in val
-or test. This is the number the fix was supposed to produce, and it
-does.
+to land in B's train fold (4474 - 4446 = 28); 4 landed in val, 11 in
+test. This is the number the fix was supposed to produce, and it does.
+
+**A small, worth-stating side-confirmation**: a random draw of 43 items
+across B's train/val/test folds (sizes 4474/639/1279) would expect
+~30.1/4.3/8.6 -- close to the observed 28/4/11 (chi-square goodness of
+fit: 0.837, p=0.658, though the val cell's expected count is below the
+usual rule-of-thumb minimum of 5, so treat the p-value as indicative,
+not precise). Quality rejection isn't correlated with fold membership --
+a small but genuine piece of evidence that the 43 rejects aren't
+clustered in a way that would itself bias which fold curation's effect
+gets measured against.
 
 **Prediction, stated before re-running anything**: with ~43 images
 removed out of ~4470 and fold membership now stable, C-vs-B should show

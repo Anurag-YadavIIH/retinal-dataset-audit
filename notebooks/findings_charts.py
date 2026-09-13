@@ -43,7 +43,7 @@ from scipy import stats
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from retinaprep.utils import load_current_run_metrics  # noqa: E402
+from retinaprep.utils import load_current_run_metrics, load_run_index  # noqa: E402
 
 ARTIFACTS = REPO_ROOT / "artifacts"
 
@@ -197,23 +197,47 @@ def fig_arm_results() -> tuple[str, str]:
 
 
 def fig_ab_replication() -> tuple[str, str]:
-    """The A-vs-B gap in two separate 5-seed runs -- same code, different draw."""
-    df = _load_run_metrics()
-    second_a = df.loc[df["arm"] == "A", "auroc"].to_numpy()
-    second_b = df.loc[df["arm"] == "B", "auroc"].to_numpy()
-    first_a = np.array(FIRST_RUN_A_AUROC)
-    first_b = np.array(FIRST_RUN_B_AUROC)
+    """The A-vs-B gap across three independent measurements -- same code,
+    three different draws, one of them (Run 3) also under a different
+    split-mode design (persisted_base, natural sizes) than the other two
+    (recompute_per_arm, capped). Each bar pair is labeled by run, split
+    mode, and training-set cap so no chart silently redefines what "Run 2"
+    or "Run 3" means -- see docs/notes.md's provenance section for why
+    Run 1's raw per-seed data has to come from FIRST_RUN_*_AUROC rather
+    than from disk.
+    """
+    entries = pd.DataFrame(load_run_index(ARTIFACTS))
+    # Two persisted cohorts distinguished by arm B's training-set size:
+    # capped (4435, pre-fix, recompute_per_arm) vs natural (4474, post-fix,
+    # persisted_base) -- distinguishing by n_train rather than hardcoding
+    # a specific hash value, since the hash is just a fingerprint.
+    b_rows = entries[entries["arm"] == "B"]
+    capped_hash = b_rows.loc[b_rows["n_train"] < 4470, "config_hash"].iloc[0]
+    natural_hash = b_rows.loc[b_rows["n_train"] >= 4470, "config_hash"].iloc[0]
 
-    _, p_first = stats.ttest_rel(first_a, first_b)
-    _, p_second = stats.ttest_rel(second_a, second_b)
+    def _auroc(config_hash: str, arm: str) -> np.ndarray:
+        sub = entries[(entries["config_hash"] == config_hash) & (entries["arm"] == arm)]
+        return sub.sort_values("seed")["auroc"].to_numpy()
 
-    fig, ax = plt.subplots(figsize=(6, 4))
-    x = np.arange(2)
+    run1_a, run1_b = np.array(FIRST_RUN_A_AUROC), np.array(FIRST_RUN_B_AUROC)
+    run2_a, run2_b = _auroc(capped_hash, "A"), _auroc(capped_hash, "B")
+    run3_a, run3_b = _auroc(natural_hash, "A"), _auroc(natural_hash, "B")
+
+    runs = [
+        ("Run 1\nrecompute_per_arm, cap=4473", run1_a, run1_b),
+        ("Run 2\nrecompute_per_arm, cap=4435", run2_a, run2_b),
+        ("Run 3\npersisted_base, uncapped", run3_a, run3_b),
+    ]
+    ps = [stats.ttest_rel(a, b)[1] for _, a, b in runs]
+    diffs = [a.mean() - b.mean() for _, a, b in runs]
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    x = np.arange(3)
     width = 0.32
-    a_means = [first_a.mean(), second_a.mean()]
-    a_stds = [first_a.std(ddof=1), second_a.std(ddof=1)]
-    b_means = [first_b.mean(), second_b.mean()]
-    b_stds = [first_b.std(ddof=1), second_b.std(ddof=1)]
+    a_means = [a.mean() for _, a, _ in runs]
+    a_stds = [a.std(ddof=1) for _, a, _ in runs]
+    b_means = [b.mean() for _, _, b in runs]
+    b_stds = [b.std(ddof=1) for _, _, b in runs]
     ax.bar(
         x - width / 2, a_means, width, yerr=a_stds, capsize=4,
         label="A (image_random)", color="#C44E52",
@@ -223,22 +247,21 @@ def fig_ab_replication() -> tuple[str, str]:
         label="B (patient_group)", color="#55A868",
     )
     ax.set_xticks(x)
-    ax.set_xticklabels(
-        [f"Run 1 (cap=4473)\np={p_first:.3f}", f"Run 2 (cap=4435)\np={p_second:.3f}"]
-    )
+    ax.set_xticklabels([f"{label}\np={p:.3f}" for (label, _, _), p in zip(runs, ps, strict=True)])
     ax.set_ylabel("AUROC")
-    ax.set_title("A-vs-B gap: two independent 5-seed runs")
+    ax.set_title("A-vs-B gap: three independent 5-seed runs")
     ax.legend()
     fig.tight_layout()
 
-    diff1 = first_a.mean() - first_b.mean()
-    diff2 = second_a.mean() - second_b.mean()
     takeaway = (
-        f"Run 1: A-B = {diff1:+.4f} AUROC, paired t-test p={p_first:.3f}. Run 2, same "
-        f"code and split strategies, different seed draw and training-set cap: "
-        f"A-B = {diff2:+.4f}, p={p_second:.3f} -- the gap shrank by more than half and "
-        f"lost significance. This is not a contradiction; it is what n=5 seeds being "
-        f"underpowered looks like when actually re-drawn, not just argued from theory."
+        f"Run 1 (cap=4473): A-B={diffs[0]:+.4f}, p={ps[0]:.3f}. "
+        f"Run 2 (cap=4435): A-B={diffs[1]:+.4f}, p={ps[1]:.3f}. "
+        f"Run 3 (uncapped, post split-then-curate fix): A-B={diffs[2]:+.4f}, p={ps[2]:.3f}. "
+        f"Runs 1 and 3 cluster near +0.018; Run 2 sits lower at +0.008 -- none reaches "
+        f"significance except Run 1's uncorrected p, and none survives Bonferroni "
+        f"correction across the family this project holds every claim to. Three draws, "
+        f"one direction, no draw individually conclusive: this is what n=5 seeds being "
+        f"underpowered looks like when actually re-drawn twice, not argued from theory once."
     )
     return _fig_to_base64(fig), takeaway
 
