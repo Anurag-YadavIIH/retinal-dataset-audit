@@ -595,6 +595,60 @@ error to flag the mismatch. The defaults now match what was actually
 measured; a fast local smoke test is an explicit opt-in override, not the
 silent default.
 
+### Cross-camera domain-shift audit: site is recoverable, and it's entangled with diagnosis
+
+Roadmap item 2. ODIR-5K mixes Canon, Zeiss and Kowa across several
+Chinese centres with no explicit camera/site column — raw image
+resolution (before this project's preprocessing resizes everything to a
+common 512x512) stands in as a proxy. Stated once, applies throughout:
+**this is a proxy for camera, not the camera itself** — if several
+cameras share a resolution, it under-counts real sites.
+
+Matched all 6392 images against the raw `Training Images/` folder,
+found 97 distinct resolutions, and DBSCAN-clustered them (eps=100px) into
+43 raw groups; groups under 50 images (long-tail/anomalous resolutions)
+were consolidated into one "Other" bucket — **20 final site classes**.
+Checked directly: 99.0% of two-eye patients share an identical raw
+resolution across both eyes, confirming this is overwhelmingly a
+per-patient property.
+
+**The test that matters**: trained a fresh ResNet18 on the *already-
+resized* 512x512 images — not the raw ones — to predict which of the 20
+site classes an image came from, on a patient-grouped split so a
+patient's fellow eye couldn't hand it a trivial shortcut. **Test
+accuracy 0.8397 against a 0.2932 majority baseline.** Because every
+image the model saw was already resized to the same dimensions, this
+result can't be about pixel dimensions — the signal is in the optics or
+colour rendition, and it survives the exact preprocessing step this
+project's whole pipeline runs on.
+
+**Then the question that actually matters for this project's leakage
+claims**: does site correlate with diagnosis? Patient-level chi-square,
+site (20 classes) against the genuinely patient-level `N` flag (not the
+per-eye `label` column this project's main task trains on, which
+disagrees across a patient's own eyes 22.2% of the time — see §2 — so
+picking one eye's value for a patient-level question would be
+arbitrary): **chi2=115.18, p=8.8e-16.** Broken down by individual
+category, every one of diabetic retinopathy, hypertensive retinopathy,
+glaucoma, cataract, myopia, and "other" shows a highly significant site
+correlation (all p<0.005); only age-related macular degeneration does
+not (p=0.12) — itself a specific, checkable exception worth a direct
+look later, not a gap glossed over.
+
+**What this means, stated plainly**: patient-level splitting (this
+project's entire design) stops a model from memorising one *patient's*
+fellow eye across train/test, but does nothing to stop it from learning
+*site-correlated* shortcuts that generalise across many different
+patients from the same centre — entirely compatible with a correct,
+patient-grouped split, since that split was never designed to address
+this axis. **Patient-level splitting is necessary but not sufficient;
+site-level splitting (holding out whole sites, not just whole patients)
+is the stricter standard this dataset would need to fully rule a site
+confound out.** Not implemented here — diagnosed and stated as a design
+conclusion for future work, the same way the split-then-curate fix
+above started as a diagnosis before it became a fix. Full numbers,
+confusion matrix, and per-category chi-square table: `docs/notes.md`.
+
 ## 10. Limitations
 
 Stated plainly, because an interviewer will find these anyway and finding
@@ -622,9 +676,13 @@ them first is the better position:
   or duplication labels** (none exist for this dataset). The uniform-haze
   blind spot in quality scoring (§6) is a concrete, known instance of this
   limitation, not a hypothetical one.
-- **No held-out camera/site split.** Class balance and quality scores were
-  not stratified by acquisition source; a camera or site confound (if one
-  exists in ODIR-5K) is not ruled out by anything in this project.
+- **No held-out camera/site split, and this is no longer a hypothetical
+  gap.** The cross-camera audit above confirms a site confound exists
+  (chi2=115.18, p=8.8e-16 against the patient-level diagnosis flag,
+  significant for 6 of 8 individual categories) — patient-level
+  splitting does not address it, since it groups by patient, not by
+  site. Diagnosed and reported, not fixed: this project does not
+  implement a site-level split.
 
 ---
 

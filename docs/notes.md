@@ -212,6 +212,115 @@ selectable via config, and exactly reproducible) at `match_arm_sizes:
 true` (capped to 4435). Both README.md and WALKTHROUGH.md now present
 both sets of numbers, clearly labelled before-fix and after-fix.
 
+## Cross-camera domain-shift audit: site is recoverable, and it's entangled with diagnosis
+
+Roadmap item 2. ODIR-5K mixes Canon, Zeiss and Kowa across multiple
+Chinese centres; there is no explicit camera/site column. Raw image
+resolution (before this project's own preprocessing resizes everything
+to 512x512) is used as a proxy for site. **Stated once, applies to
+every number below: this is a proxy, not the camera itself.** If
+several cameras happen to share a resolution, this under-counts real
+sites -- everything here is a lower bound on how much site variation
+exists, not an exact count.
+
+**Deriving the proxy**: matched all 6392 manifest filenames against the
+raw `Training Images/` folder (all 6392 found, confirmed directly) and
+recorded each one's pre-preprocessing resolution -- 97 distinct
+(width, height) pairs. Exact-tuple grouping is too fragmented to treat
+as "sites" directly (many are almost certainly the same camera with a
+slightly different crop), so the 97 distinct resolutions were
+DBSCAN-clustered (eps=100 raw pixels, min_samples=1, chosen by
+inspection: this eps merges near-identical resolutions without chaining
+distant ones together) into 43 raw clusters. Clusters holding fewer
+than 50 images (24 of the 43) were consolidated into one "Other" class,
+since a class that small can't be meaningfully split or evaluated --
+**20 final site classes**: 19 real clusters (1982 down to 53 images
+each) plus "Other" (255 images, the long tail). Checked directly
+(not assumed): 3003/3034 (99.0%) two-eye patients have both eyes at the
+identical raw resolution, and only 10/3034 (0.3%) are assigned to
+different site clusters after DBSCAN -- resolution, and therefore this
+proxy, is overwhelmingly a per-patient property, not a per-image one.
+
+**The test**: a fresh ResNet18 (new 20-class head), trained on the
+PREPROCESSED images -- already resized to a common 512x512, exactly
+like every other model in this project -- to predict site_label.
+Patient-grouped split (train=4473/val=640/test=1279, same proportions
+as the main pipeline), so a patient's fellow eye couldn't hand the
+classifier a trivial shortcut (the same leakage concern this entire
+project is about, applied here to a different target). 15 epochs max,
+patience 3, same hyperparameters as train.py otherwise.
+
+**Result: test accuracy 0.8397, against a majority-class baseline of
+0.2932 (best val accuracy 0.8719, epoch 11 of 14 before early
+stopping).** The model recovers site correctly 84% of the time on
+held-out patients, nearly 3x the naive baseline. **This is the
+finding the test was designed to surface**: the signal survived being
+resized to a common 512x512 -- it cannot be pixel dimensions, since
+every image the classifier ever saw was the same size. It has to be in
+the optics, sensor response, or colour rendition. Per-class recall is
+uneven (0.82-1.00 for the 12 largest classes; 0.36-0.56 for the
+smallest ones and "Other", which is exactly the pattern expected from
+class-size imbalance, not a red flag) and errors concentrate on specific
+pairs (e.g. true=site_11 predicted=site_1, 24/50 times) rather than
+scattering randomly, consistent with some DBSCAN clusters being the same
+real camera split across two resolution buckets rather than genuinely
+different confusions.
+
+**Then the part that matters**: does site correlate with diagnosis?
+Patient-level contingency table, site_label (20 classes) x the
+patient-level `N` flag (any diagnosed abnormality) -- chosen over the
+per-eye `label` column specifically because `N` is genuinely
+patient-level and `label` is not (see "Split-then-curate" section
+above's sibling finding: `label` disagrees across a patient's own eyes
+22.2% of the time, which would make picking one eye's value for a
+patient-level question arbitrary).
+
+**chi2=115.18, p=8.8e-16, dof=19 -- site and diagnosis are entangled,
+not independent.** Supplementary breakdown by individual category
+(same site_label x each of N/D/G/C/A/H/M/O), because "does site
+correlate with diagnosis" is more useful as "which diseases, specifically" --
+
+| Category | chi2 | p |
+|---|---|---|
+| D (diabetic retinopathy) | 171.97 | 1.2e-26 |
+| H (hypertensive retinopathy) | 174.79 | 3.3e-27 |
+| G (glaucoma) | 100.30 | 4.7e-13 |
+| C (cataract) | 82.03 | 8.3e-10 |
+| O (other) | 42.93 | 1.3e-03 |
+| M (myopia) | 39.34 | 4.0e-03 |
+| A (AMD) | 26.36 | 0.12 (not significant) |
+
+Every category except age-related macular degeneration shows a highly
+significant site correlation -- diabetic retinopathy and glaucoma, the
+two categories named as the concrete concern before running this, are
+the two strongest (alongside hypertensive retinopathy, not originally
+named but showing the single largest chi2 of all eight). AMD being the
+one exception is itself a real, specific, checkable finding, not a gap
+in the analysis -- worth a direct look in a later session rather than
+waved past.
+
+**What this means for the leakage findings in this project**: site and
+disease are demonstrably entangled in this dataset, for most disease
+categories, at a significance level that isn't close to marginal.
+Patient-level splitting (this project's entire design) prevents a model
+from memorising a specific *patient's* fellow eye across the train/test
+boundary, but it does nothing to prevent a model from learning
+*site-correlated* shortcuts that generalise across many different
+patients captured at the same centre -- a model could score well on
+disease classification partly by recognising which clinic's camera took
+the photo, entirely compatibly with a patient-grouped split, since
+patient-grouping was never designed to address this axis at all.
+**Patient-level splitting is necessary but not sufficient; site-level
+splitting (holding out entire sites, not just entire patients) is the
+stricter standard this dataset would need to fully rule out a site
+confound.** Not implemented in this project -- flagged as a genuinely
+useful design conclusion for future work, in the same spirit as the
+split-then-curate ordering fix above: diagnosed from evidence, stated
+plainly, not acted on beyond the diagnosis in this pass.
+
+Full classifier result and confusion matrix: `artifacts/domain_shift_audit.json`
+(gitignored, regenerate with `python notebooks/domain_shift_audit.py`).
+
 ## Why curation costs AUROC: three hypotheses tested, the flattering one lost
 
 The original writeup offered one hypothesis for C's -0.0146 AUROC vs B:

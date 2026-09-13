@@ -295,6 +295,47 @@ tuning.
 
 ---
 
+## Cross-camera domain-shift audit
+
+ODIR-5K mixes Canon, Zeiss and Kowa across several Chinese centres, with
+no explicit camera/site column. Raw image resolution (before this
+project's preprocessing resizes everything to a common 512x512) stands
+in as a proxy — **stated once, applies throughout: this is a proxy for
+camera, not the camera itself**, and under-counts real sites wherever
+two cameras happen to share a resolution.
+
+97 distinct raw resolutions, DBSCAN-clustered (eps=100px) into 43
+groups, consolidated (groups under 50 images) into **20 final site
+classes**. 99.0% of two-eye patients share an identical raw resolution
+across both eyes — this proxy is overwhelmingly a per-patient property.
+
+**The test that matters**: a ResNet18 trained on the *already-resized*
+512x512 images (not the raw ones) to predict site, patient-grouped
+split so a fellow eye can't hand it a shortcut. **Test accuracy 0.8397
+against a 0.2932 majority baseline.** Since every image was already the
+same size, this can't be about pixel dimensions — the signal survives
+the resize this project's whole pipeline runs on.
+
+**Then, does site correlate with diagnosis?** Patient-level chi-square
+against the genuinely patient-level `N` flag: **chi2=115.18,
+p=8.8e-16.** Broken down by category, diabetic retinopathy,
+hypertensive retinopathy, glaucoma, cataract, myopia, and "other" are
+all highly significant (p<0.005); only age-related macular degeneration
+is not (p=0.12).
+
+**What this means**: patient-level splitting (this project's entire
+design) stops a model memorising one patient's fellow eye, but does
+nothing to stop it learning site-correlated shortcuts shared across
+many different patients from the same centre — fully compatible with a
+correct, patient-grouped split, since that split was never designed to
+address this axis. **Patient-level splitting is necessary but not
+sufficient; site-level splitting is the stricter standard this dataset
+would need to fully rule a site confound out.** Diagnosed, not fixed —
+full numbers, confusion matrix, and the per-category table are in
+`docs/notes.md` and `WALKTHROUGH.md`.
+
+---
+
 ## Why patient-level splitting matters in ophthalmology specifically
 
 Two reasons that do not apply as strongly in other imaging domains:
@@ -338,7 +379,7 @@ report   -> self-contained HTML QC report
 | Patient-level labels | N, D, G, C, A, H, M, O (8 classes) |
 | Task here | Binary: normal vs abnormal |
 | Licence | *Check the Kaggle page and record the exact terms here before publishing results.* |
-| Known limitations | Class imbalance (55% abnormal under the default label rule); 324/3358 patients (9.6%) have only one usable eye in `preprocessed_images/`, so "two eyes per patient" cannot be assumed anywhere in the code; camera confound across centres; annotation quality varies; **quality scoring does not reliably catch uniform haze** (dense cataract / severe media opacity) — two essentially featureless, uniformly hazy images score 0.943 and 0.979, near the top of the entire dataset (see below) |
+| Known limitations | Class imbalance (55% abnormal under the default label rule); 324/3358 patients (9.6%) have only one usable eye in `preprocessed_images/`, so "two eyes per patient" cannot be assumed anywhere in the code; **camera/site confound across centres, confirmed not hypothetical** (chi2=115.18, p=8.8e-16 against diagnosis — see "Cross-camera domain-shift audit" below); annotation quality varies; **quality scoring does not reliably catch uniform haze** (dense cataract / severe media opacity) — two essentially featureless, uniformly hazy images score 0.943 and 0.979, near the top of the entire dataset (see below) |
 
 At the extremes, the gradability score matches what these images actually
 look like — a basic sanity check with no ground-truth quality labels to
@@ -494,8 +535,9 @@ Deliberately not built yet. Listed so the scope is honest rather than padded.
 - [ ] Mask and annotation QC: alignment, empty masks, area outliers, connected components
 - [ ] Inter-grader agreement (Dice, IoU) using DRIVE's second-observer set
 - [ ] DICOM PHI stripping and burned-in patient-text detection on the image itself
-- [ ] Cross-camera domain shift audit via a site classifier
+- [x] Cross-camera domain shift audit via a site classifier — done, see below
 - [ ] EyePACS adapter to demonstrate the adapter layer generalises
+- [ ] Site-level splitting, motivated directly by the audit above
 
 ---
 
