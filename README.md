@@ -1,5 +1,7 @@
 # RetinaPrep
 
+Repository: retinal-dataset-audit · Package: retinaprep
+
 **A curation and leakage-audit pipeline for retinal fundus datasets.**
 
 Splitting a fundus dataset by image instead of by patient lets a model see one
@@ -376,6 +378,9 @@ yet, are both normal states it reports without failing.
 ## Quickstart
 
 ```bash
+git clone https://github.com/Anurag-YadavIIH/retinal-dataset-audit.git
+cd retinal-dataset-audit
+
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 pip install -e .
