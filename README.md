@@ -392,6 +392,8 @@ not just the statistical association behind it. Full statistics,
 confusion matrix, and per-fold site/class-balance tables:
 `docs/notes.md` and `WALKTHROUGH.md`.
 
+![The deeper the split, the more leakage found: A > B > E](docs/figures/split_hierarchy.png)
+
 ### Robustness checks: is −0.0557 a prevalence artifact, or one site's fluke?
 
 Arm E's headline number carried two open confounds: its test set's class
@@ -423,6 +425,8 @@ excluded — a merged bucket, not a real site), 3 seeds each:
 | site_2 | 404 | 0.384 | **−0.0368** |
 | site_3 | 379 | 0.491 | **−0.0339** |
 | site_4 | 336 | 0.452 | **+0.0208** |
+
+![4/5 held-out sites replicate the drop -- site_4 doesn't](docs/figures/leave_one_site_out.png)
 
 4 of 5 held-out sites replicate the direction — not just the one site
 that happened to land in the original split. **site_4 is a genuine,

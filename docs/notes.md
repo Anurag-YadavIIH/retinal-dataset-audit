@@ -1536,3 +1536,77 @@ cu128/cu130/whatever is current is fine and preferable -- just override
 `scripts/doctor.py` checks for exactly this class of mismatch (sm_61
 presence, and installed-wheel CUDA version vs. driver ceiling) so it gets
 caught at setup time instead of at first kernel launch.
+
+## Item 4: reports and figures regenerated with arm E and the hierarchy
+
+Deliberate pass, per the same discipline as the earlier "Follow-up A"
+regen: every chart labeled by run/split mode, nothing silently redefined.
+
+**Two new charts** in `notebooks/findings_charts.py` (`fig_split_hierarchy`,
+`fig_leave_one_site_out`), wired into `build_sections()` so they appear in
+both `artifacts/findings_report.html` and (via `report.py`'s reuse)
+`artifacts/qc_report.html`: the three-rung hierarchy as one AUROC bar chart
+(A/B/E, each labeled by arm and split mode, captioned with the prevalence
+caveat and the prevalence-matching result that rules it out as the
+explanation), and the leave-one-site-out sweep with 95% CIs on every bar
+-- site_4's positive exception shown at the same visual weight as the
+other four, not hidden or asterisked away. Same two charts, restyled for
+README-width reading, added to `notebooks/readme_figures.py` and embedded
+in README.md's "Rungs 2 and 3" section.
+
+**A real sign bug caught before publishing, not after**: the first draft
+of `fig_split_hierarchy` computed the A-vs-B gap as B-A (matching the E-vs-B
+convention used everywhere else in this project, copy-pasted without
+checking) instead of A-B, the sign this project has used consistently
+since the original A-vs-B result (README, WALKTHROUGH.md, docs/notes.md
+all report it as "+0.0173" etc., leakage inflating the naive split's
+score). Caught by actually reading the rendered takeaway text before
+shipping it ("-0.018" read backwards from every other mention of this
+number in the project) rather than trusting that green ruff/pytest meant
+the chart was right. Fixed, and both `(A-B)`/`(E-B)` labels added inline
+to the takeaway text so the convention is unambiguous without cross-
+referencing this note.
+
+**`dedupe.py` refactored, not just reused**: `embedding_duplicates`'s
+inline feature-extraction code is now a standalone
+`compute_resnet18_embeddings`, added for `notebooks/site4_followup.py`'s
+distance-from-training check (Follow-up D) so it reuses the *exact*
+extraction dedupe.py uses rather than a re-derivation that could drift.
+`findings_charts.py`'s own `_compute_embeddings` (a near-identical copy,
+predating this refactor) was deleted in favour of importing the same
+function -- one embedding-extraction implementation in the whole project
+now, not three.
+
+**A real, if minor, infrastructure gap found while trying to update arm
+E's official cohort, and deliberately not patched around**: `config_hash`
+(`utils.py`) hashes the resolved config dict only -- it has no way to
+detect that `artifacts/site_labels.parquet` / `site_group.json`'s
+*content* changed (the patient-consistency fix, Follow-up C) without any
+config value changing. Retraining arm E under the fixed split and
+recording it via the normal `append_run_index` path would therefore get
+the *same* config_hash as the old pre-fix cohort, and
+`load_current_run_metrics`'s cohort-selection logic -- designed exactly to
+stop incompatible cohorts blending -- would silently average all 10 runs
+(5 old + 5 new) together instead of picking one. Not fixed here (out of
+scope for a reports-and-figures pass, and the fix's own effect is <0.002
+AUROC, test fold unchanged, per Follow-up C) -- worked around for these
+specific charts by sourcing arm E's numbers as literals from
+`arm_e_robustness_checks.py`'s already-verified retrain output (the same
+pattern this file already uses for `FIRST_RUN_*_AUROC`), with a comment
+at the point of use explaining exactly why. Flagged here as a real gap in
+`config_hash` for anyone who next needs to update a split file's content
+without changing its config -- the honest fix is hashing the split/label
+artifacts' own content into the hash, not touched in this pass.
+
+**Landing page (`docs/index.html`) and clinical summary
+(`docs/summary.md`) rewritten**, not just appended to: both predated arm E
+entirely and materially understated the project's own headline finding --
+`docs/index.html`'s intro described the leakage effect as "modest,
+non-replicating" (true of the patient-level effect alone, false of the
+project's actual current headline), and `docs/summary.md`'s "Bottom line"
+told a clinical reader the leakage problem was "a dial, not a switch" with
+no mention that a much larger, mostly-site-general effect exists. Both
+now lead with the three-rung hierarchy and the site-holdout result,
+without deleting the original patient-level findings (still true, just no
+longer the whole story) -- same "keep both, cite exact numbers" discipline
+as every other update in this file.

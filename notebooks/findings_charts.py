@@ -4,16 +4,17 @@ Descriptive analytics, not a new experiment. Every number here is either
 recomputed directly from real artifacts (patient overlap, fellow-eye
 concordance, arm results, cosine-similarity separation) or is a historical
 measurement from a one-off investigation recorded in docs/notes.md, cited
-inline where it is used. Two numbers fall in the second category because
-the underlying training runs are not re-run in this session ("no new
-experiments"), and their per-seed data predates artifacts/runs/index.json
-(train.py used to overwrite same-named run directories; it no longer
-does, see utils.append_run_index): the first full-scale A/B run's
-per-seed AUROC (superseded on disk by a later run that reused the same
-run-directory names before that fix landed, still recorded in
-docs/notes.md's "Full-scale A/B run" table) and the train-set overlap
+inline where it is used. Several numbers fall in the second category
+because the underlying training runs are not re-run in this session ("no
+new experiments"): the first full-scale A/B run's per-seed AUROC
+(superseded on disk by a later run that reused the same run-directory
+names before train.py stopped overwriting them, still recorded in
+docs/notes.md's "Full-scale A/B run" table), the train-set overlap
 falsification test (a report-only investigation, never persisted as an
-artifact).
+artifact), and arm E's post-patient-consistency-fix retrain plus the
+leave-one-site-out sweep (both multi-hour, multi-seed training runs --
+notebooks/arm_e_robustness_checks.py and notebooks/site4_followup.py,
+full detail in docs/notes.md).
 
 Same base64-inline pattern as eda.py and report.py; every section returns
 (base64_png, takeaway) so report.py can reuse it directly.
@@ -37,12 +38,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from PIL import Image
 from scipy import stats
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from retinaprep.dedupe import compute_resnet18_embeddings  # noqa: E402
 from retinaprep.utils import load_current_run_metrics, load_run_index  # noqa: E402
 
 ARTIFACTS = REPO_ROOT / "artifacts"
@@ -63,6 +64,40 @@ FIRST_RUN_B_AUROC = [0.7895, 0.7815, 0.7949, 0.7925, 0.8044]
 # reshuffling isn't specific to which images quality curation removed.
 TRAIN_OVERLAP_REAL = 3071 / 4435
 TRAIN_OVERLAP_RANDOM_CONTROL = 0.694
+
+# Historical: arm E (site_group split), retrained post patient-consistency-fix
+# (docs/notes.md, "Follow-up C") -- notebooks/arm_e_robustness_checks.py,
+# part1_prevalence_matched's "b_original"/"e_original", 5 seeds each. Not
+# recomputed live for the same reason FIRST_RUN_*_AUROC above isn't: this is
+# a multi-hour, multi-seed retraining sweep, not something to redo on every
+# chart regen. Supersedes (by <0.002 AUROC, test fold unchanged) the
+# pre-fix arm E cohort still on disk in artifacts/runs/index.json, whose
+# config_hash doesn't change with the split file's content and can't
+# distinguish the two on its own -- a known gap, noted rather than patched
+# around by editing the index (docs/notes.md).
+ARM_E_B_SEEDS = [42, 43, 44, 45, 46]
+ARM_E_B_AUROC = [0.7835091403162056, 0.7887104743083003, 0.8028927865612647,
+                 0.8009980237154151, 0.7815217391304347]
+ARM_E_E_AUROC = [0.7419751711730594, 0.7299373821001885, 0.7443670090127855,
+                 0.7334896597498777, 0.7352679819045622]
+ARM_E_B_PREVALENCE = 0.5504300234558248
+ARM_E_E_PREVALENCE = 0.6296670030272452
+
+# Historical: leave-one-site-out sweep (docs/notes.md, "Follow-up C"/"D"),
+# notebooks/arm_e_robustness_checks.py + notebooks/site4_followup.py. gap is
+# mean AUROC (3 seeds) minus the 3-seed B baseline (mean 0.79170); se_gap
+# combines Hanley-McNeil test-fold-size variance with seed-to-seed variance
+# (site4_followup.py's total_variance) -- accounts for fold size, not just
+# seed count, which is why these error bars are much wider than a plain
+# 3-seed std would give.
+LOSO_B_MEAN_AUROC_3SEED = 0.7917041337285902
+LOSO_SITES = {
+    "site_0": {"n_test": 1982, "gap": -0.05294427963324566, "se_gap": 0.0392},
+    "site_1": {"n_test": 501, "gap": -0.033397373524508556, "se_gap": 0.0604},
+    "site_2": {"n_test": 404, "gap": -0.03678769377522839, "se_gap": 0.0705},
+    "site_3": {"n_test": 379, "gap": -0.033927470219016875, "se_gap": 0.0669},
+    "site_4": {"n_test": 336, "gap": 0.02084353980306508, "se_gap": 0.0759},
+}
 
 
 def _fig_to_base64(fig) -> str:
@@ -266,6 +301,100 @@ def fig_ab_replication() -> tuple[str, str]:
     return _fig_to_base64(fig), takeaway
 
 
+def fig_split_hierarchy() -> tuple[str, str]:
+    """The three-rung hierarchy in one AUROC chart: image_random (arm A,
+    leaks patients) vs patient_group (arm B, leaks sites) vs site_group
+    (arm E, isolates the signal). Each bar labeled by arm, split mode, and
+    seed count so a reader can't mistake this for one split evaluated three
+    ways -- A and B share a test set (patient_group's), E does not (its
+    test set is a single held-out site with different class balance,
+    flagged explicitly rather than left implicit in the bar heights)."""
+    df = _load_run_metrics()
+    a_auroc = df.loc[df["arm"] == "A", "auroc"].to_numpy()
+    b_auroc = df.loc[df["arm"] == "B", "auroc"].to_numpy()
+    e_auroc = np.array(ARM_E_E_AUROC)
+
+    labels = [
+        "A\nimage_random\n(leaks patients)",
+        "B\npatient_group\n(leaks sites)",
+        "E\nsite_group\n(isolates signal)",
+    ]
+    means = [a_auroc.mean(), b_auroc.mean(), e_auroc.mean()]
+    stds = [a_auroc.std(ddof=1), b_auroc.std(ddof=1), e_auroc.std(ddof=1)]
+    colors = ["#C44E52", "#55A868", "#4C72B0"]
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    bars = ax.bar(labels, means, yerr=stds, capsize=5, color=colors)
+    for bar, m in zip(bars, means, strict=True):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2, m + 0.015, f"{m:.3f}",
+            ha="center", fontweight="bold",
+        )
+    ax.set_ylabel("AUROC (mean ± std, 5 seeds)")
+    ax.set_title("Three-rung hierarchy: the deeper the split, the more leakage found")
+    ax.set_ylim(0.65, 0.86)
+    fig.tight_layout()
+
+    ab_gap = means[0] - means[1]
+    be_gap = means[2] - means[1]
+    takeaway = (
+        f"A (image_random, {a_auroc.mean():.3f}) vs B (patient_group, {b_auroc.mean():.3f}): "
+        f"{ab_gap:+.3f} AUROC (A-B) -- real but small, and did not replicate significantly across "
+        f"three independent 5-seed runs (chart above). B vs E (site_group, {e_auroc.mean():.3f}): "
+        f"{be_gap:+.3f} AUROC (E-B) -- over 3x larger, 5/5 seeds agreeing, Bonferroni-significant "
+        f"(p=0.0026). Not a like-for-like comparison of test sets: E's test fold is a single "
+        f"held-out site with {ARM_E_E_PREVALENCE*100:.0f}% abnormal prevalence vs "
+        f"B's {ARM_E_B_PREVALENCE*100:.0f}% -- checked directly (docs/notes.md) and the drop "
+        f"survives prevalence-matching within 6% of its own size, so this is not a prevalence "
+        f"artifact. Each rung's split catches leakage the rung above it structurally cannot."
+    )
+    return _fig_to_base64(fig), takeaway
+
+
+def fig_leave_one_site_out() -> tuple[str, str]:
+    """All five leave-one-site-out gaps, error bars included, site_4's
+    positive exception shown exactly as measured -- not smoothed over.
+    Error bars combine Hanley-McNeil test-fold-size variance with
+    seed-to-seed variance (site4_followup.py), which is why every single
+    interval spans zero even though 4/5 point estimates land in the
+    predicted direction: this chart is deliberately showing both facts at
+    once, not picking the flattering one."""
+    sites = list(LOSO_SITES.keys())
+    gaps = [LOSO_SITES[s]["gap"] for s in sites]
+    ses = [LOSO_SITES[s]["se_gap"] for s in sites]
+    n_tests = [LOSO_SITES[s]["n_test"] for s in sites]
+    colors = ["#C44E52" if g < 0 else "#55A868" for g in gaps]
+
+    fig, ax = plt.subplots(figsize=(8, 4.8))
+    x = np.arange(len(sites))
+    bars = ax.bar(x, gaps, yerr=[1.96 * se for se in ses], capsize=5, color=colors)
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{s}\n(n_test={n})" for s, n in zip(sites, n_tests, strict=True)])
+    ax.set_ylabel("AUROC gap vs arm B (3-seed baseline)")
+    ax.set_title("Leave-one-site-out: gap vs B, 95% CI (test-fold-size aware)")
+    for bar, g in zip(bars, gaps, strict=True):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2, g + (0.012 if g >= 0 else -0.012),
+            f"{g:+.3f}", ha="center", va="bottom" if g >= 0 else "top", fontweight="bold",
+        )
+    fig.tight_layout()
+
+    n_negative = sum(1 for g in gaps if g < 0)
+    takeaway = (
+        f"{n_negative}/{len(sites)} held-out sites show the same negative gap as the original "
+        f"arm E result (site_0) -- this is not just the one site that happened to land in the "
+        f"original split. site_4 is a genuine exception ({LOSO_SITES['site_4']['gap']:+.3f}, "
+        f"consistent across all 3 of its own seeds, not a training fluke) that class balance "
+        f"and embedding-distance-from-training don't explain (docs/notes.md). Every interval "
+        f"shown here spans zero, including site_0's -- accounting for test-fold size (not just "
+        f"seed variance) shows no single site's estimate is precise enough alone to rule out a "
+        f"true gap of zero; the sweep's value is the consistent direction across sites, not any "
+        f"one site's number read in isolation."
+    )
+    return _fig_to_base64(fig), takeaway
+
+
 def fig_train_overlap_falsification() -> tuple[str, str]:
     """Falsification test: does curation remove *specific* informative images, or
     does any small change to the input pool reshuffle StratifiedGroupKFold this much?"""
@@ -296,51 +425,20 @@ def fig_train_overlap_falsification() -> tuple[str, str]:
     return _fig_to_base64(fig), takeaway
 
 
-def _compute_embeddings(paths: list[str]) -> np.ndarray:
-    """L2-normalized pretrained-ResNet18 penultimate features. Mirrors
-    dedupe.embedding_duplicates's model/transform so this chart's cosine
-    values are directly comparable to the threshold dedupe.py actually uses."""
-    import torch
-    from torchvision import models, transforms
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    backbone = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-    backbone.fc = torch.nn.Identity()
-    backbone.eval().to(device)
-
-    transform = transforms.Compose(
-        [
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        ]
-    )
-
-    batch_size = 64
-    features = []
-    with torch.no_grad():
-        for start in range(0, len(paths), batch_size):
-            batch_paths = paths[start : start + batch_size]
-            tensors = [transform(Image.open(p).convert("RGB")) for p in batch_paths]
-            batch = torch.stack(tensors).to(device)
-            feats = torch.nn.functional.normalize(backbone(batch), dim=1)
-            features.append(feats.cpu().numpy())
-    return np.concatenate(features, axis=0)
-
-
 def fig_cosine_separation(cosine_min: float = 0.99) -> tuple[str, str]:
     """Cosine similarity: fellow-eye pairs vs confirmed duplicate pairs.
 
     Computed fresh from the real images (not resampled from docs/notes.md's
-    summary stats), using the same embedding extraction dedupe.py uses, so
-    the separation shown here is directly checkable against the configured
-    threshold rather than asserted.
+    summary stats), using the exact same embedding extraction dedupe.py
+    uses (retinaprep.dedupe.compute_resnet18_embeddings, imported directly
+    rather than re-derived here), so the separation shown here is directly
+    checkable against the configured threshold rather than asserted.
     """
     manifest = pd.read_parquet(ARTIFACTS / "manifest.parquet")
     dup_df = pd.read_parquet(ARTIFACTS / "duplicates.parquet")
 
     paths = manifest["image_path"].tolist()
-    embeddings = _compute_embeddings(paths)
+    embeddings = compute_resnet18_embeddings(paths)
     idx_of = {p: i for i, p in enumerate(paths)}
 
     counts = manifest.groupby("patient_id").size()
@@ -424,6 +522,8 @@ def build_sections() -> list[tuple[str, str, str]]:
         ("Fellow-eye label concordance", fig_concordance),
         ("4-arm results", fig_arm_results),
         ("A-vs-B: does the gap replicate?", fig_ab_replication),
+        ("The three-rung hierarchy: A vs B vs E", fig_split_hierarchy),
+        ("Leave-one-site-out: is E's drop one site or a real pattern?", fig_leave_one_site_out),
         ("Training-set overlap falsification test", fig_train_overlap_falsification),
         ("Embedding similarity: fellow eyes vs duplicates", fig_cosine_separation),
     ]

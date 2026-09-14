@@ -1,4 +1,4 @@
-"""Four PNGs for README.md, exported to docs/figures/.
+"""Six PNGs for README.md, exported to docs/figures/.
 
 Designed for a README, not a notebook: readable at ~800px wide, large
 fonts, minimal chartjunk, and a title that states the finding rather
@@ -8,7 +8,8 @@ with distinct, README-appropriate styling -- these are not the same
 figures as the HTML reports.
 
 Run: python notebooks/readme_figures.py
-Output: docs/figures/{patient_overlap,concordance,ab_replication,quality_examples}.png
+Output: docs/figures/{patient_overlap,concordance,ab_replication,
+        split_hierarchy,leave_one_site_out,quality_examples}.png
 """
 
 from __future__ import annotations
@@ -191,6 +192,69 @@ def ab_replication() -> None:
     plt.close(fig)
 
 
+def split_hierarchy() -> None:
+    """Three-rung hierarchy in one AUROC chart: A (image_random) vs B
+    (patient_group) vs E (site_group). Reuses findings_charts.py's data
+    constants directly (imported, not retyped) so this can't silently drift
+    from the HTML report's numbers."""
+    findings = _load_findings_module()
+    df = findings._load_run_metrics()
+    a_auroc = df.loc[df["arm"] == "A", "auroc"].to_numpy()
+    b_auroc = df.loc[df["arm"] == "B", "auroc"].to_numpy()
+    e_auroc = np.array(findings.ARM_E_E_AUROC)
+
+    labels = ["A\nimage_random", "B\npatient_group", "E\nsite_group"]
+    means = [a_auroc.mean(), b_auroc.mean(), e_auroc.mean()]
+    stds = [a_auroc.std(ddof=1), b_auroc.std(ddof=1), e_auroc.std(ddof=1)]
+
+    fig, ax = plt.subplots(figsize=(8.5, 5))
+    bars = ax.bar(labels, means, yerr=stds, capsize=6, color=[RED, GREEN, BLUE], width=0.55)
+    for bar, m in zip(bars, means, strict=True):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2, m + 0.018, f"{m:.3f}",
+            ha="center", fontsize=20, fontweight="bold",
+        )
+    ax.set_ylabel("AUROC")
+    ax.set_ylim(0.65, 0.87)
+    fig.suptitle(
+        "The deeper the split, the more leakage found: A > B > E", fontsize=19, y=1.02
+    )
+    fig.tight_layout()
+    fig.savefig(FIGURES_DIR / "split_hierarchy.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def leave_one_site_out() -> None:
+    """All five leave-one-site-out gaps, 95% CI included, site_4's positive
+    exception shown exactly as measured. Reuses findings_charts.py's
+    LOSO_SITES constant (imported, not retyped)."""
+    findings = _load_findings_module()
+    sites = list(findings.LOSO_SITES.keys())
+    gaps = [findings.LOSO_SITES[s]["gap"] for s in sites]
+    ses = [findings.LOSO_SITES[s]["se_gap"] for s in sites]
+    n_tests = [findings.LOSO_SITES[s]["n_test"] for s in sites]
+    colors = [RED if g < 0 else GREEN for g in gaps]
+
+    fig, ax = plt.subplots(figsize=(9, 5.2))
+    x = np.arange(len(sites))
+    bars = ax.bar(x, gaps, yerr=[1.96 * se for se in ses], capsize=6, color=colors, width=0.6)
+    ax.axhline(0, color="black", linewidth=1)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{s}\n(n={n})" for s, n in zip(sites, n_tests, strict=True)])
+    ax.set_ylabel("AUROC gap vs arm B")
+    for bar, g in zip(bars, gaps, strict=True):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2, g + (0.018 if g >= 0 else -0.018), f"{g:+.3f}",
+            ha="center", va="bottom" if g >= 0 else "top", fontsize=17, fontweight="bold",
+        )
+    fig.suptitle(
+        "4/5 held-out sites replicate the drop -- site_4 doesn't", fontsize=19, y=1.02
+    )
+    fig.tight_layout()
+    fig.savefig(FIGURES_DIR / "leave_one_site_out.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def quality_examples() -> None:
     quality = pd.read_parquet(ARTIFACTS / "quality.parquet").sort_values("score")
     lowest = quality.head(6)
@@ -226,13 +290,25 @@ def quality_examples() -> None:
     plt.close(fig)
 
 
+FIGURE_NAMES = (
+    "patient_overlap",
+    "concordance",
+    "ab_replication",
+    "split_hierarchy",
+    "leave_one_site_out",
+    "quality_examples",
+)
+
+
 def main() -> None:
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     patient_overlap()
     concordance()
     ab_replication()
+    split_hierarchy()
+    leave_one_site_out()
     quality_examples()
-    for name in ("patient_overlap", "concordance", "ab_replication", "quality_examples"):
+    for name in FIGURE_NAMES:
         path = FIGURES_DIR / f"{name}.png"
         print(f"Wrote {path} ({path.stat().st_size} bytes)")
 
