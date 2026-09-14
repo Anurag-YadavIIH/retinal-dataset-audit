@@ -204,13 +204,45 @@ def fold_site_balance(manifest: pd.DataFrame, split: dict) -> dict:
     return {"counts_per_fold": table, "per_class_train_fraction": per_class_train_fraction}
 
 
-def train_site_classifier(manifest: pd.DataFrame, split: dict, class_names: list[str]) -> dict:
+class SiteDataset:
+    """Module-level (not nested in train_site_classifier, as
+    domain_shift_audit.py has it) specifically so DataLoader workers can
+    pickle it: Windows spawns workers rather than forking, and a class
+    defined inside a function body cannot be pickled by reference.
+
+    That detail is load-bearing, not stylistic. Measured on this dataset:
+    the transform pipeline costs ~72ms/image single-threaded, which at
+    24,590 training images is ~30 minutes per epoch and leaves the GPU
+    idle ~90% of the time (sampled: 0/0/0/0/94/0%). Keeping the class
+    nested would force num_workers=0 and make a 15-epoch run a 5-8 hour
+    job on this data.
+    """
+
+    def __init__(self, paths: list[str], transform, label_of_path: pd.Series, class_to_idx: dict):
+        self.paths = paths
+        self.transform = transform
+        self.label_of_path = label_of_path
+        self.class_to_idx = class_to_idx
+
+    def __len__(self) -> int:
+        return len(self.paths)
+
+    def __getitem__(self, idx: int):
+        path = self.paths[idx]
+        with Image.open(path) as im:
+            image = self.transform(im.convert("RGB"))
+        return image, self.class_to_idx[self.label_of_path.loc[path]]
+
+
+def train_site_classifier(
+    manifest: pd.DataFrame, split: dict, class_names: list[str], num_workers: int = 4
+) -> dict:
     """ResNet18 predicting site_label from the image -- same design as
     domain_shift_audit.py's function of the same name (on-the-fly resize
     to 256/crop 224, identical to this project's train.py transform)."""
     import torch
     from torch import nn
-    from torch.utils.data import DataLoader, Dataset
+    from torch.utils.data import DataLoader
     from torchvision import models, transforms
 
     set_global_seed(SEED)
@@ -238,30 +270,19 @@ def train_site_classifier(manifest: pd.DataFrame, split: dict, class_names: list
         ]
     )
 
-    class SiteDataset(Dataset):
-        def __init__(self, paths, transform):
-            self.paths = paths
-            self.transform = transform
+    def _loader(paths: list[str], transform, shuffle: bool) -> DataLoader:
+        return DataLoader(
+            SiteDataset(paths, transform, label_of_path, class_to_idx),
+            batch_size=32,
+            shuffle=shuffle,
+            num_workers=num_workers,
+            persistent_workers=num_workers > 0,
+            prefetch_factor=4 if num_workers > 0 else None,
+        )
 
-        def __len__(self):
-            return len(self.paths)
-
-        def __getitem__(self, idx):
-            path = self.paths[idx]
-            with Image.open(path) as im:
-                image = self.transform(im.convert("RGB"))
-            label = class_to_idx[label_of_path.loc[path]]
-            return image, label
-
-    train_loader = DataLoader(
-        SiteDataset(split["train"], transform_train), batch_size=32, shuffle=True, num_workers=0
-    )
-    val_loader = DataLoader(
-        SiteDataset(split["val"], transform_eval), batch_size=32, shuffle=False, num_workers=0
-    )
-    test_loader = DataLoader(
-        SiteDataset(split["test"], transform_eval), batch_size=32, shuffle=False, num_workers=0
-    )
+    train_loader = _loader(split["train"], transform_train, shuffle=True)
+    val_loader = _loader(split["val"], transform_eval, shuffle=False)
+    test_loader = _loader(split["test"], transform_eval, shuffle=False)
 
     model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
     model.fc = nn.Linear(model.fc.in_features, len(class_names))
