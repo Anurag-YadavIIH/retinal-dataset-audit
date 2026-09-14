@@ -46,7 +46,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from retinaprep.adapters.base import register
+from retinaprep.adapters.base import register, subsample_by_patient
 from retinaprep.config import resolve_path
 from retinaprep.utils import MANIFEST_COLUMNS, get_logger
 
@@ -73,7 +73,7 @@ def build_manifest(cfg: dict) -> pd.DataFrame:
 
     df = _assign_labels(df, cfg["label"])
     df = _resolve_and_filter_paths(df, image_dir)
-    df = _subsample_by_patient(df, dataset_cfg.get("subsample_n"), cfg["seed"])
+    df = subsample_by_patient(df, dataset_cfg.get("subsample_n"), cfg["seed"])
 
     df["dataset_name"] = dataset_cfg["name"]
     df["age"] = df["Patient Age"].astype(float)
@@ -230,34 +230,3 @@ def _resolve_and_filter_paths(df: pd.DataFrame, image_dir: Path) -> pd.DataFrame
     return df.loc[exists_mask].reset_index(drop=True)
 
 
-def _subsample_by_patient(df: pd.DataFrame, subsample_n: int | None, seed: int) -> pd.DataFrame:
-    """Cap the manifest to roughly `subsample_n` rows by keeping whole patients.
-
-    Subsampling by image would silently split a patient's eyes across the
-    subsample boundary and undermine the whole leakage experiment, so patients
-    are drawn whole (be it one eye or two) and accumulated until the row-count
-    target is reached (the last patient added may push the total slightly
-    over subsample_n).
-    """
-    if subsample_n is None or len(df) <= subsample_n:
-        return df
-
-    patient_sizes = df.groupby("patient_id").size()
-    rng = np.random.default_rng(seed)
-    shuffled_patients = rng.permutation(patient_sizes.index.to_numpy())
-
-    kept_patients = []
-    running_total = 0
-    for pid in shuffled_patients:
-        if running_total >= subsample_n:
-            break
-        kept_patients.append(pid)
-        running_total += int(patient_sizes[pid])
-
-    logger.info(
-        "Subsampled to %d whole patients (%d rows), target was %d rows",
-        len(kept_patients),
-        running_total,
-        subsample_n,
-    )
-    return df.loc[df["patient_id"].isin(kept_patients)].reset_index(drop=True)

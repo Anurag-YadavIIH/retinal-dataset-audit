@@ -155,3 +155,63 @@ def synthetic_cfg(synthetic_fundus_dir, tmp_path):
         }
     )
     return cfg
+
+
+@pytest.fixture
+def synthetic_eyepacs_dir(tmp_path):
+    """Generate a synthetic EyePACS-shaped raw dataset: an image directory
+    plus `trainLabels.csv` at the real download's confirmed shape (columns
+    `image, level`; `image` is `<patient_id>_<left|right>`, no extension).
+
+    8 two-eye patients (16 images, alternating no-DR/referable-DR by DR
+    grading convention: level>=2 is abnormal) and one single-eye patient
+    (ID 20, left eye only) -- mirrors synthetic_fundus_dir's single-eye
+    case so the adapter never assumes exactly two rows per patient here
+    either.
+    """
+    rng = np.random.default_rng(1)
+    data_root = tmp_path
+    image_dir = data_root / "train"
+    image_dir.mkdir(parents=True)
+
+    records: list[dict] = []
+
+    def add_row(pid, side, img, level):
+        name = f"{pid}_{side}"
+        img.save(image_dir / f"{name}.jpeg", quality=95)
+        records.append({"image": name, "level": level})
+
+    for pid in range(1, 9):
+        normal = pid <= 4
+        level = 0 if normal else 3
+        img_l = _fundus_image(rng, brightness=190 if normal else 150)
+        img_r = _fundus_image(rng, brightness=195 if normal else 145)
+        add_row(pid, "left", img_l, level)
+        add_row(pid, "right", img_r, level)
+
+    # Single-eye patient: only a left eye exists, same shape of edge case
+    # as synthetic_fundus_dir's patient 15.
+    single_eye_img = _fundus_image(rng, brightness=192)
+    add_row(20, "left", single_eye_img, 1)
+
+    metadata = pd.DataFrame.from_records(records)
+    metadata.to_csv(data_root / "trainLabels.csv", index=False)
+
+    return data_root, metadata
+
+
+@pytest.fixture
+def synthetic_eyepacs_cfg(synthetic_eyepacs_dir, tmp_path):
+    """Real default.yaml config, repointed at the synthetic EyePACS fixture."""
+    data_root, _ = synthetic_eyepacs_dir
+    cfg = load_config(
+        overrides={
+            "paths.data_root": str(data_root),
+            "paths.artifacts": str(tmp_path / "artifacts"),
+            "dataset.name": "eyepacs",
+            "dataset.metadata_csv": "trainLabels.csv",
+            "dataset.image_dir": "train",
+            "dataset.image_ext": "jpeg",
+        }
+    )
+    return cfg
