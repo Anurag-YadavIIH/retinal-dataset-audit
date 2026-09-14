@@ -434,6 +434,23 @@ threshold alone (t-test p=0.096, sign test p=0.375) — reported as found,
 not smoothed over: **generalizes across most held-out sites, not all of
 them.** Full per-seed numbers: `docs/notes.md`.
 
+**Two more checks on site_4.** A confidence interval per site that
+accounts for test-*fold* size (not just seed variance — closed-form
+Hanley-McNeil SE from each fold's fixed positive/negative counts, no
+retraining needed) shows **every site's interval spans zero, including
+the original site_0** — with one fold's worth of images per site, no
+single site's number is precise enough alone to rule out zero. This
+doesn't undo the 5-seed Bonferroni result (that answers "does this
+reproduce across models on the *same* fold" — yes, still true) but it
+does mean no individual site's gap should be read as a precise,
+population-level estimate on its own. Second: does distance from the
+training distribution (mean pairwise cosine distance, pretrained ResNet18
+features — the same extraction `dedupe.py` uses) explain site_4?
+Predicted it would be closest to training; **it isn't** — it's tied for
+farthest, and site_0 (the largest loss) is second-closest, backwards
+from the hypothesis (Pearson r=+0.40, p=0.50, wrong-signed and
+untestable at n=5). site_4 stays an unexplained exception.
+
 ---
 
 ## Why patient-level splitting matters in ophthalmology specifically

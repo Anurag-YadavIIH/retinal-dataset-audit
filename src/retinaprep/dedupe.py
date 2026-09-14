@@ -71,20 +71,18 @@ def pixel_difference(path_a: str, path_b: str) -> float:
     return float(np.abs(arr_a - arr_b).mean())
 
 
-def embedding_duplicates(
-    manifest: pd.DataFrame, cosine_min: float, model_name: str
-) -> list[tuple[str, str, float]]:
-    """Near-duplicates via pretrained ResNet18 penultimate features + cosine similarity.
+def compute_resnet18_embeddings(paths: list[str], model_name: str = "resnet18") -> np.ndarray:
+    """L2-normalized pretrained-ResNet18 penultimate features, one 512-dim row
+    per path, in the given order.
 
-    phash catches crops and rescales; embeddings catch the same eye
-    photographed twice under different illumination or exposure, where the
-    raw pixels differ substantially even though the content is the same.
-    Only "resnet18" is supported (the only model this project's config
-    exposes); `model_name` is accepted for the config's own documentation
-    value, not dispatched on.
+    Factored out of `embedding_duplicates` so anything that needs the raw
+    feature vectors (not just the near-duplicate pairs `embedding_duplicates`
+    reports) uses the exact same extraction, not a re-derivation that could
+    silently drift from it -- e.g. `notebooks/site_domain_distance.py`, which
+    measures how far a held-out site's images sit from the training pool in
+    this same feature space.
     """
     import torch
-    from sklearn.neighbors import NearestNeighbors
     from torchvision import models, transforms
 
     if model_name != "resnet18":
@@ -105,7 +103,6 @@ def embedding_duplicates(
         ]
     )
 
-    paths = manifest["image_path"].tolist()
     batch_size = 64
     features = []
     with torch.no_grad():
@@ -118,7 +115,22 @@ def embedding_duplicates(
             batch = torch.stack(tensors).to(device)
             feats = torch.nn.functional.normalize(backbone(batch), dim=1)
             features.append(feats.cpu().numpy())
-    feature_matrix = np.concatenate(features, axis=0)
+    return np.concatenate(features, axis=0)
+
+
+def embedding_duplicates(
+    manifest: pd.DataFrame, cosine_min: float, model_name: str
+) -> list[tuple[str, str, float]]:
+    """Near-duplicates via pretrained ResNet18 penultimate features + cosine similarity.
+
+    phash catches crops and rescales; embeddings catch the same eye
+    photographed twice under different illumination or exposure, where the
+    raw pixels differ substantially even though the content is the same.
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    paths = manifest["image_path"].tolist()
+    feature_matrix = compute_resnet18_embeddings(paths, model_name)
 
     n_neighbors = min(6, len(paths))
     neighbours = NearestNeighbors(metric="cosine", n_neighbors=n_neighbors).fit(feature_matrix)

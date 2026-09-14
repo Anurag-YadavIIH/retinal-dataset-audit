@@ -769,6 +769,31 @@ its own (t-test p=0.096, sign test p=0.375) — the honest read is
 exactly the outcome this check was designed to be able to report either
 way. Full numbers, per-seed and per-site: `docs/notes.md`.
 
+**Two more checks on site_4, both humbling in useful ways.** First: a
+confidence interval on each site's gap that accounts for *test-fold
+size*, not just seed variance (closed-form Hanley-McNeil SE, using only
+each fold's fixed positive/negative counts — no retraining needed).
+This answers a different question than the 5-seed Bonferroni result
+does — not "does this gap reproduce across models on this same fixed
+fold" (yes, unaffected) but "would it survive a different, equally-sized
+sample from that site's population." **Every single site's interval
+spans zero, including the original site_0 result** — with one fold's
+worth of images (336–1982), no individual site's AUROC is precise
+enough alone to rule out a true gap of zero, symmetrically across all
+five, not just the exception. The honest read: this weakens confidence
+in any *one* site's number in isolation; it's the reason the project
+runs a whole sweep rather than trusting a single held-out fold.
+
+Second: does distance from the training distribution (mean pairwise
+cosine distance, pretrained ResNet18 features — the exact extraction
+`dedupe.py` already uses) predict the accuracy loss? Predicted site_4
+would be *closest* to training, explaining its exception. **It isn't** —
+it's tied for farthest, and site_0 (the largest loss) is the
+*second-closest*, backwards from the hypothesis. Correlation is weak
+and wrong-signed (Pearson r=+0.40, p=0.50) — reported as a clean
+negative result, not reframed to look better. site_4 stays an
+unexplained exception, which is a fine place to leave it.
+
 ## 10. Limitations
 
 Stated plainly, because an interviewer will find these anyway and finding
@@ -805,10 +830,14 @@ them first is the better position:
   carried were followed up directly (§9): prevalence-matching shows the
   drop isn't a class-balance artifact, and leave-one-site-out across 4
   more sites replicates the direction for 3 of them (one, site_4, is a
-  genuine unexplained exception) — so this is a real, largely
-  site-general effect, not a single-fold fluke, but 5 site-level
-  observations is still too few to call it a precise, universal estimate
-  of a production model's site-level generalisation gap.
+  genuine unexplained exception not explained by class balance or by
+  distance from the training distribution in embedding space) — so
+  this is a real, largely site-general effect, not a single-fold fluke.
+  A test-fold-size-aware confidence interval on *any individual* site's
+  gap (including the original site_0) spans zero, though — 5 one-fold
+  observations, however consistent in direction, is too few and each
+  too small on its own to call this a precise, universal per-site
+  estimate of a production model's site-level generalisation gap.
 
 ---
 

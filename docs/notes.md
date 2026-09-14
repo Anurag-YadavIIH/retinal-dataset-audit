@@ -568,6 +568,89 @@ site happened to land in the original split -- but it is not a universal
 per-site guarantee either, and a claim that *every* held-out site would
 show this drop would be overstated by this data.
 
+### Follow-up D: is site_4 within a small test fold's noise, and does distance-from-training explain it?
+
+Two more checks on the one exception (site_4, +0.0208), both in
+`notebooks/site4_followup.py`, both reusing the leave-one-site-out
+results above without any retraining.
+
+**Check A -- a confidence interval on each site's gap that accounts for
+test-fold size, not just seed-to-seed variance.** The original 5-seed
+Bonferroni analysis (Follow-up B) answers "does this gap reproduce
+across differently-trained models on this *same fixed* test fold?" --
+yes, decisively. It does not answer a different question: "would this
+gap's sign and rough size survive swapping in a different, equally-sized
+sample from that site's population?" -- a question that gets harder to
+answer the smaller the fold. Closed-form Hanley-McNeil (1982) SE for a
+single AUC estimate, using only the AUC value and the fold's fixed
+n1 (abnormal)/n0 (normal) counts -- no raw predictions needed, so no
+retraining. Total variance per site = this test-fold-size term (fixed,
+does not shrink with more seeds, since every seed sees the identical
+fold) + seed-to-seed variance/n_seeds (does shrink). Gap CI combines the
+site's total variance with B's own (n1=704, n0=575, its own 3-seed
+variance) under independence:
+
+| Held-out site | n1 / n0 | gap | SE | 95% CI |
+|---|---|---|---|---|
+| site_0 (original) | 1248/734 | -0.0529 | 0.0392 | [-0.1298, +0.0239] |
+| site_1 | 245/256 | -0.0334 | 0.0604 | [-0.1518, +0.0850] |
+| site_2 | 155/249 | -0.0368 | 0.0705 | [-0.1750, +0.1014] |
+| site_3 | 186/193 | -0.0339 | 0.0669 | [-0.1650, +0.0971] |
+| site_4 | 152/184 | +0.0208 | 0.0759 | [-0.1278, +0.1695] |
+
+**Every single interval spans zero -- including the original site_0
+result.** This is not a contradiction of the earlier Bonferroni-
+significant finding; it is a different, more conservative question
+answered honestly. The original claim (reproduces across models on a
+fixed fold) still stands unchanged -- it is about model reproducibility,
+not population generalization, and this check does not touch it.
+This new check says: with a single site's worth of held-out images (336
+to 1982, one fold each, not a random sample repeated many times), none
+of the five per-site AUROC estimates is precise enough on its own to
+rule out a true population gap of zero for that specific site -- **the
+sign flip at site_4 sits comfortably inside noise this test-fold size
+can produce, and so, by the same honest standard, does every other
+site's negative gap when judged this way.** Reported exactly that
+plainly: this check *weakens* confidence in reading any single site's
+number literally, symmetrically across all five, not just site_4 --
+the right correction is more sites and/or bigger folds per site, not a
+larger claim from the same data.
+
+**Check B -- does distance from the training distribution predict the
+accuracy loss?** Hypothesis (stated before computing anything): sites
+further from the training pool in embedding space should show a larger
+accuracy drop, and site_4, being the least-anomalous gap, should be the
+*closest*. Mean pairwise cosine distance (pretrained ResNet18 penultimate
+features, `dedupe.compute_resnet18_embeddings` -- the identical
+extraction dedupe itself uses, not a re-derivation) from each held-out
+site's images to the rest of the dataset (the training pool):
+
+| Held-out site | mean cosine distance to pool | gap |
+|---|---|---|
+| site_3 | 0.1200 | -0.0339 |
+| site_0 | 0.1259 | -0.0529 |
+| site_4 | 0.1361 | +0.0208 |
+| site_1 | 0.1367 | -0.0334 |
+| site_2 | 0.1374 | -0.0368 |
+
+**The hypothesis does not hold.** site_4 is not the closest site to the
+training pool -- it's tied with site_1 near the *farthest* end, and
+site_0 (the largest accuracy loss) is the *second-closest*, the opposite
+of what the hypothesis predicts. Pearson r=+0.401 (p=0.503), Spearman
+r=+0.100 (p=0.873) between distance and gap -- weak, in the wrong
+direction to support the hypothesis even before accounting for n=5
+making any correlation here untestable. Reported as a genuine negative
+result, not reframed: distance-from-training-in-this-embedding-space
+does not explain site_4 (or the sweep's pattern generally). Worth noting
+as a limitation of the check itself, not just the hypothesis: all five
+sites' distances sit in a narrow 0.117-0.137 band -- unsurprising, since
+"site" here is a resolution-cluster proxy within one dataset's fundus
+photography, not genuinely different imaging domains, so this specific
+metric may simply lack the dynamic range to discriminate a real effect
+even if one exists. **site_4 remains an unexplained exception** --
+reported as exactly that, per the instruction that motivated this whole
+check: an unexplained exception, honestly reported, is a fine outcome.
+
 ## Why curation costs AUROC: three hypotheses tested, the flattering one lost
 
 The original writeup offered one hypothesis for C's -0.0146 AUROC vs B:
