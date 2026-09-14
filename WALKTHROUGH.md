@@ -725,6 +725,50 @@ never again cost re-running the 14 minutes to find out. Designing
 around where a failure is expensive, not just fixing the failure
 itself, is worth a sentence here.
 
+**Arm E's headline number carried two open confounds when first
+reported: its test set's class balance differs from arm B's (63% vs 55%
+abnormal), and its test fold *is* a single site — one observation, not a
+distribution. Both were checked directly rather than left as caveats.**
+
+*The 6 straddling patients, first.* Verified the guess directly: 10
+patients (not just the 6 that crossed a fold boundary — 4 more have
+inconsistent labels that landed in the same multi-site train fold) really
+do have two eyes at different raw resolutions, because resolution is a
+per-*image*, not per-patient, property. Fixed with
+`enforce_patient_site_consistency` — each patient's pair is forced to one
+label (their majority, ties broken away from the `Other` bucket): 10
+images reassigned, 0 patients left inconsistent, patient overlap on the
+re-split falls to 0/0/0. Effect on the split itself is small, as expected
+from a 10-image change on 6392: train 4008→4006, val 402→404, **and the
+test fold — arm E's headline result — is untouched: same site (site_0),
+same 1982 images.**
+
+*Prevalence-matched re-evaluation* — retrained B and E (5 seeds,
+`save_predictions=True` this time, since the original runs never
+persisted per-example scores or weights, only aggregate metrics; closed
+that gap in `train.run_train` to make this check possible at all).
+Compared the AUROC gap at B's own 55% prevalence, at E's own 63%, and at
+each subsampled to match the other. All three land in a **0.0032-wide
+band** (−0.0514 to −0.0546) — under 6% of the gap's own size. **The drop
+survives prevalence-matching in both directions, essentially unchanged.
+It is not a prevalence artifact.**
+
+*Leave-one-site-out*, across the 4 next-largest named sites (`Other`
+excluded — it's a merged bucket, not a real site), 3 seeds each,
+compared to the same 3-seed B baseline: 4 of 5 held-out sites (including
+the original site_0) show the same negative gap, −0.033 to −0.053 —
+this is not just the one site that happened to land in the original
+split. **site_4 is a genuine exception: +0.0208, consistent across all
+three of its own seeds**, so not a training fluke — and its class
+balance (45.2% abnormal) doesn't explain it either, being unremarkable
+next to two sites (site_1, site_3) that *do* show the expected drop.
+Reported as found, not smoothed over: with only 5 site-level
+observations this doesn't clear a two-sided significance threshold on
+its own (t-test p=0.096, sign test p=0.375) — the honest read is
+**"generalizes across most held-out sites, not all of them,"** which is
+exactly the outcome this check was designed to be able to report either
+way. Full numbers, per-seed and per-site: `docs/notes.md`.
+
 ## 10. Limitations
 
 Stated plainly, because an interviewer will find these anyway and finding
@@ -755,12 +799,16 @@ them first is the better position:
 - **Site-level splitting (arm E) exists but isn't the default.** The
   cross-camera audit confirms a site confound (chi2=115.18, p=8.8e-16
   against diagnosis) and arm E measures its cost directly (AUROC drops
-  0.0557 when entire sites are held out, Bonferroni-significant) — but
-  the main experiment matrix (arms A-D) still splits by patient, not
-  site, and arm E's own test fold is a single dominant site rather than
-  a genuinely varied held-out sample (see §9), so it demonstrates the
-  effect exists rather than giving a clean, generalisable estimate of a
-  production model's site-level generalisation gap.
+  0.0557 when entire sites are held out, Bonferroni-significant) — the
+  main experiment matrix (arms A-D) still splits by patient, not site.
+  The single-test-fold and prevalence-shift confounds this originally
+  carried were followed up directly (§9): prevalence-matching shows the
+  drop isn't a class-balance artifact, and leave-one-site-out across 4
+  more sites replicates the direction for 3 of them (one, site_4, is a
+  genuine unexplained exception) — so this is a real, largely
+  site-general effect, not a single-fold fluke, but 5 site-level
+  observations is still too few to call it a precise, universal estimate
+  of a production model's site-level generalisation gap.
 
 ---
 

@@ -355,7 +355,7 @@ Patient-level integrity comes free: since 99.0% of two-eye patients
 share one site, grouping by site overwhelmingly keeps a patient's eyes
 together too — though not perfectly (6 patients straddle a fold
 boundary under `site_group`, vs 0 under `patient_group`; checked
-directly, not assumed).
+directly, not assumed — **fixed below, see "Robustness checks"**).
 
 **A real caveat, stated before the result**: with only 20 groups and
 one (`site_0`) holding 31% of the dataset, the val fold ended up being
@@ -391,6 +391,48 @@ sufficient — this is the direct, measured demonstration of that claim,
 not just the statistical association behind it. Full statistics,
 confusion matrix, and per-fold site/class-balance tables:
 `docs/notes.md` and `WALKTHROUGH.md`.
+
+### Robustness checks: is −0.0557 a prevalence artifact, or one site's fluke?
+
+Arm E's headline number carried two open confounds: its test set's class
+balance differs from B's (63% vs 55% abnormal), and its test fold *is* a
+single site — one observation, not a distribution. Checked directly.
+
+**The 6 straddling patients, fixed.** Verified the mechanism: 10 patients
+(not just the 6 that crossed a fold) really do have two eyes at different
+raw resolutions. `enforce_patient_site_consistency` assigns each
+patient's pair to their majority label — 10 images reassigned, 0 patients
+left inconsistent, patient overlap on the re-split now **0/0/0**. Effect
+on the split: train 4008→4006, val 402→404 — **arm E's test fold itself
+is untouched, same site, same 1982 images.**
+
+**Prevalence-matched re-evaluation** (retrained B and E, 5 seeds, to get
+per-example predictions the original runs never saved): the AUROC gap at
+B's own 55% prevalence, at E's own 63%, and at each subsampled to match
+the other, all land in a **0.0032-wide band** (−0.0514 to −0.0546) —
+under 6% of the gap's own size. **Survives prevalence-matching in both
+directions, essentially unchanged. Not a prevalence artifact.**
+
+**Leave-one-site-out**, across the 4 next-largest sites (`Other`
+excluded — a merged bucket, not a real site), 3 seeds each:
+
+| Held-out site | n_test | abnormal frac | gap vs B |
+|---|---|---|---|
+| site_0 (original arm E) | 1982 | 0.630 | **−0.0529** |
+| site_1 | 501 | 0.489 | **−0.0334** |
+| site_2 | 404 | 0.384 | **−0.0368** |
+| site_3 | 379 | 0.491 | **−0.0339** |
+| site_4 | 336 | 0.452 | **+0.0208** |
+
+4 of 5 held-out sites replicate the direction — not just the one site
+that happened to land in the original split. **site_4 is a genuine,
+unexplained exception** (consistent across all 3 of its own seeds, so
+not a training fluke; its class balance doesn't explain it either, being
+unremarkable next to two sites that *do* show the drop). With only 5
+site-level observations this doesn't clear a two-sided significance
+threshold alone (t-test p=0.096, sign test p=0.375) — reported as found,
+not smoothed over: **generalizes across most held-out sites, not all of
+them.** Full per-seed numbers: `docs/notes.md`.
 
 ---
 

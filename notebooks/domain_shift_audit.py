@@ -111,6 +111,41 @@ def cluster_sites(resolutions: pd.Series) -> tuple[pd.Series, dict]:
     return site_label, report
 
 
+def enforce_patient_site_consistency(
+    manifest: pd.DataFrame, site_label: pd.Series, cluster_report: dict
+) -> pd.Series:
+    """Force both eyes of a patient to share one site label, resolving
+    disagreement by preferring the larger (more images, therefore a more
+    confident DBSCAN assignment) class -- "Other" is always least
+    preferred regardless of its raw count, since it's the residual
+    bucket for small/anomalous clusters, not a real site.
+
+    Fixes the patient-level leakage this proxy otherwise has: 10/3358
+    patients have two eyes at genuinely different raw resolutions
+    (confirmed directly, not assumed), 6 of whom straddled a site_group
+    split fold before this fix (docs/notes.md). Doesn't touch the
+    underlying resolution measurements -- only the minority eye of each
+    of those 10 patients gets its label overridden to match the other,
+    applying the same "trust the bigger cluster" reasoning already used
+    to consolidate small clusters into "Other" in cluster_sites.
+    """
+    class_size = cluster_report["images_per_final_class"]
+
+    def _rank(label: str) -> tuple:
+        return (label == "Other", -class_size.get(label, 0))
+
+    df = manifest[["patient_id"]].assign(site_label=site_label.to_numpy())
+    preferred = df.groupby("patient_id")["site_label"].agg(lambda s: min(s.unique(), key=_rank))
+    resolved = df["patient_id"].map(preferred)
+    n_changed = int((resolved.to_numpy() != site_label.to_numpy()).sum())
+    logger.info(
+        "Enforced patient-level site consistency: %d image(s) reassigned "
+        "to match their patient's preferred (larger-class) site label",
+        n_changed,
+    )
+    return resolved
+
+
 def patient_level_site(manifest: pd.DataFrame) -> pd.DataFrame:
     """Assign each patient one site label (the mode of their eyes' image-
     level labels) and report how often a patient's own eyes disagree --
@@ -346,7 +381,11 @@ def main() -> None:
     logger.info("Computing raw resolutions for %d images...", len(manifest))
     resolutions = compute_raw_resolutions(manifest)
     site_label, cluster_report = cluster_sites(resolutions)
+    site_label = enforce_patient_site_consistency(manifest, site_label, cluster_report)
     manifest = manifest.assign(site_label=site_label)
+    cluster_report["images_per_final_class"] = (
+        manifest["site_label"].value_counts().sort_values(ascending=False).to_dict()
+    )
 
     class_names = sorted(manifest["site_label"].unique(), key=lambda c: (c == "Other", c))
     logger.info("Site clusters: %s", cluster_report)

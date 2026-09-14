@@ -441,6 +441,133 @@ for camera, not the camera itself, throughout this entire result** --
 restated because it applies to arm E's site definition exactly as much
 as to the audit that produced it.
 
+### Follow-up C: is arm E's -0.0557 a prevalence artifact, or a single-site fluke?
+
+Two confounds stood between arm E's headline number and a clean claim:
+its test set's class balance differs from arm B's (63% vs 55% abnormal),
+and its test fold *is* a single site (site_0) -- one observation, not a
+distribution. Both checked directly rather than argued away.
+
+**Fix first: the 6 straddling patients.** `site_group`'s own overlap
+report (Follow-up B) showed 6 patients splitting across a fold boundary
+where `patient_group` has 0. Verified the mechanism directly instead of
+assuming it: computed raw-resolution clusters fresh and checked, per
+patient, how many distinct site labels their two eyes carry. **10
+patients** (not just the 6 that happened to straddle a fold -- 4 more
+have inconsistent labels that both landed in the same multi-site train
+fold, so didn't show up as fold-crossing) have two eyes at genuinely
+different raw resolutions, confirming the guess exactly: the site proxy,
+built from image resolution, is not perfectly patient-consistent because
+resolution is a per-*image* property and a patient's two eyes were not
+always captured with the same equipment/settings.
+
+**Fix**: `enforce_patient_site_consistency` (in `domain_shift_audit.py`)
+assigns each patient's *pair* of images to one label -- their majority
+label, breaking ties by preferring the larger class over the `Other`
+bucket. Reassigns exactly the minority eye for each affected patient:
+**10 images changed, across 10 patients, 0 remaining inconsistent**
+(checked directly after the fix, not assumed). Re-ran the full
+`site_group` split on the corrected labels: patient overlap drops to
+**0/0/0** across train/val/test (checked directly: train patients=2115,
+test patients=1032, zero set-intersection all three ways). Effect on the
+split itself is small, as expected for a 10-image change on a 6392-image
+pool: train 4008->4006, val 402->404 (net 2 images moved train->val),
+**test fold unchanged in count and identity (site_0, 1982 images)** --
+arm E's headline test fold is not touched by this fix at all. Re-training
+was still required for the checks below because model weights and
+per-example predictions were never persisted in the original runs (see
+`train.run_train`'s new `save_predictions` argument) -- an infrastructure
+gap independent of this fix, closed while doing this work.
+
+**Check 1 -- prevalence-matched re-evaluation (no retraining of the
+*mechanism* under test, but retraining was needed to get predictions to
+re-evaluate at all).** Retrained B and E, 5 seeds each (42-46), same
+config, `record_run=False` so this doesn't pollute the official results
+table, `save_predictions=True` to get per-example scores. Baseline gap on
+this retrained cohort: **-0.05452** (AUROC, E-B, 5-seed mean) -- close to
+but not identical to the originally reported -0.0557; the ~0.001-0.002
+drift is retraining stochasticity at matched seeds, already characterized
+elsewhere in this project (arm E's own AUROC std is 0.0194), not a
+regression, and small next to the effect being measured.
+
+Then, per test-set direction:
+
+| Comparison | B (as-is) | E (as-is) | AUROC gap (E-B) |
+|---|---|---|---|
+| Original prevalences (B 55.0% abn, E 63.0% abn) | 0.79153 | 0.73701 | **-0.05452** |
+| Matched at B's 55% (E's test subsampled down) | 0.79153 | 0.73695 | **-0.05457** |
+| Matched at E's 63% (B's test subsampled up) | 0.78838 | 0.73701 | **-0.05137** |
+
+All three gaps sit inside a **0.0032-wide band** (-0.0514 to -0.0546) --
+under 6% of the gap's own magnitude. Subsampling B's test set up to E's
+63% abnormal rate shrinks the gap only slightly (-0.0546 -> -0.0514);
+subsampling E's test down to B's 55% barely moves it at all (-0.0546 in
+the other direction). **This resolves the ambiguity the check was
+designed to test: the AUROC drop survives prevalence-matching in both
+directions, essentially unchanged. It is not a prevalence artifact.**
+Consistent with AUROC's rank-based, prevalence-invariant construction --
+and consistent with, without further evidence either confirming or
+refuting, AUPRC's earlier non-movement (p=0.706): AUPRC's own prevalence
+sensitivity was one plausible reason it didn't move, and nothing here
+contradicts that reading, but nothing here proves it was *the* reason
+either -- stated as exactly that level of confidence, not resolved in the
+finding's favour beyond what was actually checked.
+
+**Check 2 -- leave-one-site-out across the 4 largest named sites (`Other`
+excluded: it is a merged bucket of small clusters, not a real site).**
+For each of site_1 through site_4 in turn: hold out that entire site as
+test, `GroupKFold` on `patient_id` for the train/val split of everything
+else, train 3 seeds, compare to the same 3-seed B baseline
+(mean AUROC 0.79170). site_0 (arm E's original test fold) is included
+using the retrained cohort from Check 1 as a fifth point of reference.
+
+| Held-out site | n_test | abnormal frac | mean AUROC (3 seeds) | gap vs B |
+|---|---|---|---|---|
+| site_0 (original arm E) | 1982 | 0.630 | 0.7388 | **-0.0529** |
+| site_1 | 501 | 0.489 | 0.7583 | **-0.0334** |
+| site_2 | 404 | 0.384 | 0.7549 | **-0.0368** |
+| site_3 | 379 | 0.491 | 0.7578 | **-0.0339** |
+| site_4 | 336 | 0.452 | 0.8125 | **+0.0208** |
+
+**4 of 5 held-out sites replicate the direction**, at magnitudes
+(-0.033 to -0.053) comparable to or only somewhat smaller than the
+original arm E result -- this is not a phenomenon that only shows up for
+the one site that happened to land in the original test fold. **site_4
+is a genuine, unexplained exception**, and is reported as found rather
+than smoothed over: +0.0208, and not a seed fluke -- all three seeds
+individually score higher than the B baseline (0.7983, 0.8126, 0.8268),
+a tighter spread than several of the negative-gap sites. Checked and
+ruled out as an explanation: site_4's class balance (45.2% abnormal) is
+unremarkable, close to site_1 (48.9%) and site_3 (49.1%), both of which
+*do* show the expected negative gap -- prevalence is not what
+distinguishes site_4. Noted, not resolved: site_4 has the smallest test
+fold of the five (336 images, vs 379-1982 for the others), which widens
+the sampling uncertainty on its point estimate purely from which 336
+images happen to be in it -- a reason for humility about the exact
+magnitude, not a specific causal account of why the sign flips.
+
+Statistics across the 5 site-level observations, treated as an
+independent sample (n=5, not the within-site 3-seed n): one-sample
+t-test of the 5 gaps against 0 gives t=-2.17, **p=0.096 two-sided**
+(p=0.048 one-sided, in the predicted direction); sign test on 4/5
+negative gives p=0.375 two-sided. **Neither clears a conventional
+two-sided threshold at n=5** -- five sites is too few for this sweep
+alone to reach the statistical certainty of the original 5-seed,
+single-site result, and it isn't being reported as if it did. The value
+of this check is corroboration of direction and rough magnitude across
+sites the model has never seen, not a fresh significance claim: on that
+reading, the result is "mostly yes, not universally" -- exactly the
+outcome the check was designed to be able to report either way.
+
+**Bottom line on both checks, stated plainly**: the -0.055-ish AUROC drop
+survives prevalence-matching decisively and generalizes across most
+(4/5), but not all, held-out sites. The original arm E number is a real
+and largely representative measurement of a site-generalization cost,
+not a prevalence artifact and not purely an artifact of which single
+site happened to land in the original split -- but it is not a universal
+per-site guarantee either, and a claim that *every* held-out site would
+show this drop would be overstated by this data.
+
 ## Why curation costs AUROC: three hypotheses tested, the flattering one lost
 
 The original writeup offered one hypothesis for C's -0.0146 AUROC vs B:

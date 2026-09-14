@@ -182,6 +182,23 @@ def _cap_train_size(train_paths: list[str], cap: int | None, seed: int) -> list[
     return [train_paths[i] for i in sorted(kept)]
 
 
+def _predict_scores(model: nn.Module, loader: DataLoader) -> np.ndarray:
+    """Raw positive-class probability per example, in loader iteration
+    order (matches the underlying dataset's path order exactly when the
+    loader has shuffle=False, which every eval loader in this module
+    does) -- for analyses that need per-example scores rather than the
+    aggregate metrics `evaluate` returns."""
+    device = next(model.parameters()).device
+    model.eval()
+    scores = []
+    with torch.no_grad():
+        for images, _labels in loader:
+            images = images.to(device)
+            probs = torch.softmax(model(images), dim=1)[:, 1]
+            scores.append(probs.cpu().numpy())
+    return np.concatenate(scores)
+
+
 def run_train(
     cfg: dict,
     split_name: str | None = None,
@@ -192,6 +209,8 @@ def run_train(
     train_size_cap: int | None = None,
     manifest: pd.DataFrame | None = None,
     split: dict | None = None,
+    save_predictions: bool = False,
+    record_run: bool = True,
 ) -> dict:
     """Train, early-stop on val AUROC, save artifacts/runs/<name>_<ts>_<hash>/metrics.json.
 
@@ -205,6 +224,20 @@ def run_train(
     standalone `retinaprep train`. When `split` is omitted, it's read from
     artifacts/splits/<split_name>.json (the plain CLI path); `manifest`
     defaults to artifacts/manifest.parquet inside build_dataloaders.
+
+    `save_predictions`, when True, also writes `<run_dir>/test_predictions.parquet`
+    (image_path, true_label, score) -- model weights themselves are never
+    persisted (this project doesn't need inference after the fact for its
+    main pipeline), so per-example scores are the cheapest way to make a
+    completed run re-analysable (e.g. a prevalence-matched re-evaluation)
+    without retraining a second time for a different question.
+
+    `record_run`, when False, skips the artifacts/runs/index.json entry --
+    for a deliberate re-run of an already-reported seed (same config, same
+    seed, reproducing an identical result deterministically) done only to
+    capture `save_predictions` after the fact. Recording it anyway would
+    silently double the seeds `load_current_run_metrics` averages over for
+    that arm.
     """
     if split_name is None:
         raise SystemExit("run_train needs --split (image_random|patient_group)")
@@ -314,21 +347,39 @@ def run_train(
     save_json(result, run_dir / "metrics.json")
     logger.info("Wrote %s", run_dir / "metrics.json")
 
-    append_run_index(
-        artifacts_dir,
-        {
-            "run_name": name,
-            "arm": arm,
-            "seed": seed,
-            "split_name": split_name,
-            "config_hash": cfg_hash,
-            "timestamp": timestamp,
-            "run_dir": run_dir.name,
-            "n_train": result["n_train"],
-            "auroc": test_metrics["auroc"],
-            "auprc": test_metrics["auprc"],
-            "sens_95_spec": test_metrics["sensitivity_at_95_specificity"],
-        },
-    )
+    if save_predictions:
+        label_source = manifest if manifest is not None else pd.read_parquet(
+            artifacts_dir / "manifest.parquet"
+        )
+        label_by_path = label_source.set_index("image_path")["label"]
+        test_scores = _predict_scores(model, test_loader)
+        predictions = pd.DataFrame(
+            {
+                "image_path": split["test"],
+                "true_label": [int(label_by_path.loc[p]) for p in split["test"]],
+                "score": test_scores,
+            }
+        )
+        predictions_path = run_dir / "test_predictions.parquet"
+        predictions.to_parquet(predictions_path, index=False)
+        logger.info("Wrote %s", predictions_path)
+
+    if record_run:
+        append_run_index(
+            artifacts_dir,
+            {
+                "run_name": name,
+                "arm": arm,
+                "seed": seed,
+                "split_name": split_name,
+                "config_hash": cfg_hash,
+                "timestamp": timestamp,
+                "run_dir": run_dir.name,
+                "n_train": result["n_train"],
+                "auroc": test_metrics["auroc"],
+                "auprc": test_metrics["auprc"],
+                "sens_95_spec": test_metrics["sensitivity_at_95_specificity"],
+            },
+        )
 
     return result
