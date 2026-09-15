@@ -11,7 +11,6 @@ import json
 import numpy as np
 import pandas as pd
 from PIL import Image
-from scipy.spatial.distance import pdist, squareform
 
 from retinaprep.config import resolve_path
 from retinaprep.utils import get_logger, save_json
@@ -44,15 +43,49 @@ def phash_duplicates(manifest: pd.DataFrame, hamming_max: int) -> list[tuple[str
         with Image.open(p) as im:
             hashes.append(imagehash.phash(im).hash.flatten())
     hash_matrix = np.array(hashes)
+    return _hamming_pairs_chunked(paths, hash_matrix, hamming_max)
 
-    frac = pdist(hash_matrix, metric="hamming")
-    dist = squareform(frac * hash_matrix.shape[1])
-    np.fill_diagonal(dist, 999)
 
-    idx_i, idx_j = np.where(dist <= hamming_max)
-    keep = idx_i < idx_j
-    idx_i, idx_j = idx_i[keep], idx_j[keep]
-    return [(paths[i], paths[j], int(dist[i, j])) for i, j in zip(idx_i, idx_j, strict=True)]
+def _hamming_pairs_chunked(
+    paths: list[str], hash_matrix: np.ndarray, hamming_max: int, block: int = 2048
+) -> list[tuple[str, str, int]]:
+    """Pairs within `hamming_max`, computed a block of rows at a time.
+
+    The obvious implementation -- `squareform(pdist(...))` -- materialises
+    the full n x n float64 matrix, which is fine at ODIR-5K's n=6,392
+    (0.46GB peak) and impossible at EyePACS's n=35,126 (4.6GB condensed
+    plus 9.2GB square, against 7.8GB of RAM). That is an O(n^2) memory
+    cost for an O(k) answer: only ~0.15% of pairs are ever within
+    threshold, so there is no reason to hold the other 99.85%.
+
+    Hamming distance between binary rows is computed by matrix product
+    rather than broadcasting: for a, b in {0,1}^64, the number of
+    differing bits is popcount(a) + popcount(b) - 2*(a . b). Broadcasting
+    an (block, n, 64) boolean would cost more than the matrix it replaces;
+    a (block, n) float32 product costs 281MB at block=2048 and is BLAS-fast.
+
+    Emits pairs in the same order the square-matrix version did (i
+    ascending, then j ascending, i < j only), so cluster ids downstream
+    are unchanged.
+    """
+    n, n_bits = hash_matrix.shape
+    mat = hash_matrix.astype(np.float32)
+    popcount = mat.sum(axis=1)
+
+    pairs: list[tuple[str, str, int]] = []
+    for start in range(0, n, block):
+        stop = min(start + block, n)
+        dot = mat[start:stop] @ mat.T
+        dist = popcount[start:stop, None] + popcount[None, :] - 2.0 * dot
+
+        # Only the strict upper triangle: for row i, consider j > i.
+        rows, cols = np.where(dist <= hamming_max)
+        rows_global = rows + start
+        keep = rows_global < cols
+        rows_global, cols = rows_global[keep], cols[keep]
+        for i, j in zip(rows_global, cols, strict=True):
+            pairs.append((paths[i], paths[j], int(round(dist[i - start, j]))))
+    return pairs
 
 
 def pixel_difference(path_a: str, path_b: str) -> float:
@@ -69,6 +102,38 @@ def pixel_difference(path_a: str, path_b: str) -> float:
         arr_a = np.asarray(rgb_a, dtype=np.float64)
         arr_b = np.asarray(rgb_b, dtype=np.float64)
     return float(np.abs(arr_a - arr_b).mean())
+
+
+def _verify_one(candidate: tuple[str, str, int]) -> tuple[str, str, int, float]:
+    a, b, hamming = candidate
+    return (a, b, hamming, pixel_difference(a, b))
+
+
+def _verify_candidates(
+    candidates: list[tuple[str, str, int]], parallel_threshold: int = 50_000
+) -> list[tuple[str, str, int, float]]:
+    """Pixel-verify every phash candidate, in parallel when there are enough
+    of them to be worth the process-pool startup.
+
+    Verification is the other quadratic cost in this module and the one
+    that actually dominates at scale: candidate counts grow with n^2
+    (31,084 at n=6,392 implies ~930,000 at n=35,126), and each one opens
+    two JPEGs, so a serial pass over EyePACS runs for hours. It is also
+    embarrassingly parallel -- each pair is independent and needs only
+    PIL and numpy, no torch, so workers stay light.
+
+    Serial below the threshold so ODIR-5K-sized runs (and the test suite)
+    behave exactly as before, with no pool overhead and no behaviour
+    change.
+    """
+    if len(candidates) < parallel_threshold:
+        return [_verify_one(c) for c in candidates]
+
+    from multiprocessing import Pool
+
+    logger.info("Verifying %d candidates across 6 processes...", len(candidates))
+    with Pool(6) as pool:
+        return pool.map(_verify_one, candidates, chunksize=256)
 
 
 def compute_resnet18_embeddings(paths: list[str], model_name: str = "resnet18") -> np.ndarray:
@@ -225,9 +290,7 @@ def run_dedupe(cfg: dict) -> None:
     phash_candidates = phash_duplicates(manifest, dedupe_cfg["phash_hamming_max"])
     logger.info("%d phash candidate pairs; verifying by pixel difference...", len(phash_candidates))
 
-    verified_phash = [
-        (a, b, hamming, pixel_difference(a, b)) for a, b, hamming in phash_candidates
-    ]
+    verified_phash = _verify_candidates(phash_candidates)
     verified_phash = [t for t in verified_phash if t[3] < PIXEL_DIFF_VERIFIED_MAX]
     logger.info(
         "%d/%d phash candidates verified as genuine duplicates (pixel diff < %.1f)",

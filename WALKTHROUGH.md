@@ -943,9 +943,13 @@ dataset it was never tested against.
 
 ### Duplicates: the largest divergence
 
-At matched size (6,392 images, patients kept whole), EyePACS has **444
-verified duplicate pairs against ODIR-5K's 11**, and **441 cases of the
-same image filed under two different patient IDs** against ODIR-5K's 8.
+At matched size — 6,392 images each, which is ODIR-5K's *whole dataset*
+but a *subsample* of EyePACS's 35,126 — EyePACS has **444 verified
+duplicate pairs against ODIR-5K's 11** (69.5 vs 1.7 per 1,000 images),
+and **441 cases of the same eye filed under two different patient IDs**
+against ODIR-5K's 8 (69.0 vs 1.3 per 1,000). The EyePACS figure is not a
+dataset total: the full-dataset count is higher but unmeasured, and does
+not scale linearly, since candidate pairs grow quadratically with n.
 
 The obvious confound was tested before believing it: EyePACS has many
 near-black failed captures, and two blank frames would pass both the

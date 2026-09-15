@@ -13,7 +13,7 @@ insufficient for the next**:
 |---|---|---|---|
 | **1** | Image-level splits leak **patients** | 42.0% of patients cross a fold<br>(46.5% of two-eye patients) | **45.9%** |
 | **2** | Patient-level splits leak **sites** | site recoverable **84.0%** vs 29.3% baseline;<br>entangled with diagnosis χ²=115.2 | **93.2%** vs 29.6%;<br>χ²=139.6 |
-| **3** | Neither catches **duplicated patients** | 11 duplicate pairs,<br>8 the same photo under two patient IDs | **444 pairs,<br>441 cross-patient** |
+| **3** | Neither catches **duplicated patients** | 11 pairs (**1.7/1,000**),<br>8 under two patient IDs<br>*whole dataset, n=6,392* | **444 pairs (69.5/1,000)**,<br>441 under two patient IDs<br>*subsample, n=6,392 of 35,126* |
 
 Measured on two datasets from different continents, populations and
 imaging programmes — ODIR-5K (6,392 images, multi-centre Chinese) and
@@ -43,8 +43,12 @@ than in a footnote:
   prevalence-matching and replicates across 4 of 5 held-out sites, but
   **every individual site's confidence interval spans zero**, including
   the original.
-- The duplicate finding shows contamination **exists**; it does not show
-  that any specific published result was affected.
+- The duplicate counts are measured at **matched sample size** (6,392
+  images each), so they are comparable to one another but are **not**
+  EyePACS dataset totals — the full-dataset figure is higher and
+  unmeasured, and does not scale linearly (candidate pairs grow
+  quadratically). The finding shows contamination **exists**; it does
+  not show that any specific published result was affected.
 
 The model here is deliberately boring. The data path is the contribution.
 
@@ -479,68 +483,109 @@ untestable at n=5). site_4 stays an unexplained exception.
 
 Both levels above protect against a *declared* patient ID crossing a fold
 boundary. Neither has any mechanism to notice that two **different**
-declared IDs are the same underlying photograph. Only content-based
-deduplication closes that gap — and in EyePACS the gap is large.
+declared IDs hold the same underlying photograph. Only content-based
+deduplication closes that gap.
 
-### EyePACS: 441 photographs filed under two different patient IDs
+### The comparison, with denominators
 
-Measured on a patient-grouped subsample matched to ODIR-5K's exact size
-(6,392 images, 3,196 whole patients), so scale is held constant:
+**Read the denominators before the counts.** ODIR-5K's numbers cover its
+entire dataset. EyePACS's cover a patient-grouped subsample drawn to
+ODIR-5K's exact size, so the two are measured at identical scale — the
+EyePACS figures are *not* dataset totals.
 
-| (both n=6,392) | ODIR-5K | EyePACS |
+| | ODIR-5K | EyePACS |
 |---|---|---|
+| Images scanned | 6,392 (**whole dataset**) | 6,392 (**subsample of 35,126**) |
 | Verified duplicate pairs | 11 | **444** |
-| Of those, same image under two *different* patient IDs | 8 | **441** |
-| Duplicate clusters | 11 | **118** |
-| Clusters straddling `image_random` | 3 (27%) | 75 (64%) |
-| **Clusters straddling `patient_group`** | 2 (18%) | **68 (58%)** |
+| — per 1,000 images | 1.7 | **69.5** |
+| Same image under two *different* patient IDs | 8 | **441** |
+| — per 1,000 images | 1.3 | **69.0** |
+| Duplicate clusters | 11 | 118 |
+| Clusters straddling `patient_group` | 2 (18%) | **68 (58%)** |
 
-**How they were found.** Perceptual hash (`hamming≤6`) to generate
-candidates, then every candidate verified by mean absolute pixel
-difference (threshold 5.0 on a 0–255 scale), plus an independent
-pretrained-ResNet18 embedding pass at cosine ≥0.99. phash alone is not
-sufficient evidence on this modality — see the false-positive analysis
-below — so nothing counts as a duplicate without pixel-level
-verification.
+At matched scale, EyePACS carries roughly **40x the duplicate rate** —
+69.5 against 1.7 pairs per 1,000 images. The per-1,000 rate is the
+comparable quantity here *because* both were measured at n=6,392; it is
+not scale-invariant, for reasons the next section makes concrete.
 
-**How the obvious confound was excluded.** EyePACS contains many
-near-black failed captures (16.9% fall below the gradability threshold,
-some scoring 0.00), and *two blank frames would pass both the phash and
-the pixel-difference test while being unrelated photographs*. Checked
-directly: flagged duplicates are somewhat enriched for dark, low-quality
-images (median intensity 50.6 vs 73.3 overall; 23.7% below the reject
-threshold vs 16.9%) — an enrichment, not an explanation. The median
-flagged duplicate scores 0.569 and the minimum is 0.271, not 0.00.
-Settled by looking: a sampled contact sheet
-(`artifacts/eyepacs_dedupe6392/dup_pairs_sample.png`) shows unmistakably
-identical photographs — matching vessel trees, optic disc positions,
-lesion positions, even matching notch artifacts at the frame edge —
-several differing only in white balance, i.e. the same capture
-re-processed or re-uploaded.
+### The full-dataset count is unknown, and does not scale linearly
 
-**What this means for anyone training on EyePACS.** EyePACS underpins a
-large amount of published diabetic-retinopathy work and several cleared
-products. A model trained on it with a patient-grouped split will, on
-these numbers, still have roughly **58% of duplicate clusters spanning
-train and test** — the same photograph scored as both a training example
-and a held-out one, with the split doing exactly what it was designed to
-do. The practical implication is that patient-level splitting is not
-sufficient hygiene for this dataset, and a content-based dedupe pass
-should be part of the pipeline.
+A full scan of all 35,126 EyePACS images was run (it needed the chunked
+rewrite described below). It is **not** reported as the dataset-wide
+duplicate count, because the cluster-level results do not survive
+inspection:
 
-**What this does *not* show, stated explicitly.** This is a measurement
-of dataset contamination, not an audit of anybody's results. It does not
-demonstrate that any specific published model, benchmark number or
-regulatory submission was affected — that would require knowing each
-study's split and re-running it, which this project has not done. The
-numbers above come from a 6,392-image subsample, not the full 35,126-image
-train split, so the dataset-wide count is unmeasured (and the subsample
-was drawn to match ODIR-5K's size, not to estimate a total). Visual
-confirmation covered a sample of clusters, not all 118. Finally, "the
-same photograph under two patient IDs" is what the pixel evidence shows;
-whether that reflects genuine re-enrolment, an export artifact, or
-deliberate anonymisation of repeat visits is not something this data can
-distinguish.
+- **Candidate pairs grow quadratically, not linearly.** 31,084 candidates
+  at n=6,392 became **1,005,485** at n=35,126 — 32x more candidates for
+  5.5x more images (n^2.03, essentially exactly quadratic). A 5.5x larger
+  dataset therefore does not mean 5.5x the duplicates: every image gets
+  5.5x more chances to match something, so both true discoveries *and*
+  false positives rise faster than dataset size.
+- **Transitive chaining corrupts the clusters at that scale.** Union-find
+  merges A~B and B~C into one cluster. At n=6,392 the largest cluster
+  held 46 images; at n=35,126 two clusters held **1,870 and 1,797**, and
+  five clusters held 75% of all flagged images. Sampling those giant
+  clusters at random shows *visibly different eyes* — members that are
+  not duplicates of each other measure 7.9-9.6 apart, well above the 5.0
+  threshold that linked them pairwise.
+
+So: the dataset-wide count is **higher than 444 but unmeasured**, and the
+naive full-scan figures (16,782 pairs, 5,721 images, 492 clusters) are
+inflated by chaining and are not used anywhere in this document.
+
+### What the EyePACS duplicates actually are
+
+Worth stating precisely, because "the same photograph filed twice" is
+stronger than the evidence supports:
+
+**ODIR-5K's duplicates include byte-level copies.** Its verified pairs run
+from 0.0037 to 4.89 mean absolute pixel difference; the tightest are
+pixel-identical — their difference map is empty.
+
+**EyePACS's contain none.** Across all 31,084 candidates, *not one* pair
+falls below 2.0. The 444 verified pairs sit between 2.0 and 5.0, in a
+smooth continuum rather than a separated population.
+
+Inspected directly at full resolution rather than trusted as a scalar:
+sampled EyePACS pairs show the same eye — same optic disc position, same
+vessel arcade, same macula — differing in colour balance and slight
+registration. Their difference maps light up along vessels, which is the
+signature of a small registration shift, not of different eyes. The same
+signature appears in ODIR-5K's own near-threshold verified pair (4.89),
+which is unambiguously the same eye.
+
+So the defensible claim is: **visually indistinguishable images, differing
+in colour processing, filed under different patient IDs** — consistent
+with a capture re-exported or re-graded and re-enrolled. Not
+byte-identical re-uploads, which is what ODIR-5K has.
+
+**Two cautions on method, learned the hard way here.** A scalar pixel
+difference alone could not separate these cases: the lowest-scoring pair
+in the entire EyePACS candidate set is one patient's *left and right
+eyes*, which are definitionally not duplicates, and the frame-edge notch
+that looks like a per-capture fingerprint turns out to be a systematic
+EyePACS capture artifact appearing across unrelated images. Both nearly
+produced wrong conclusions in opposite directions.
+
+### What this means for anyone training on EyePACS
+
+EyePACS underpins a large amount of published diabetic-retinopathy work
+and several cleared products. On these numbers, a model trained on it
+with a patient-grouped split will still have **58% of duplicate clusters
+spanning train and test** — the same eye scored as both a training
+example and a held-out one, with the split doing exactly what it was
+designed to do. Patient-level splitting is not sufficient hygiene for
+this dataset; a content-based dedupe pass belongs in the pipeline.
+
+**What this does not show**, stated explicitly: this measures
+contamination in a dataset, not anyone's results. It does not demonstrate
+that any specific published model, benchmark number or regulatory
+submission was affected — that would require knowing each study's split
+and re-running it, which this project has not done. The counts come from
+a 6,392-image subsample, not all 35,126. Visual confirmation covered
+sampled pairs, not all 444. And whether the duplication reflects genuine
+re-enrolment, an export artifact, or deliberate anonymisation of repeat
+visits is not something these data can distinguish.
 
 ### ODIR-5K: the same problem, two orders of magnitude smaller
 
@@ -592,17 +637,23 @@ fundus (or likely other structurally-homogeneous medical imaging) data
 should expect this and budget for verification, not just threshold
 tuning.
 
-### A scaling limit, reported rather than papered over
+### The O(n²) blowup, fixed
 
-`phash_duplicates` builds a full n×n distance matrix via `squareform`:
-0.46GB peak at ODIR-5K's n=6,392, but **13.79GB at EyePACS's n=35,126**,
-against 7.8GB of RAM. An O(n²) memory problem that is invisible at the
-scale it was written against. Deliberately *not* rewritten: candidate
-counts scale with n² as well (31,084 candidates at n=6,392 implies
-~930,000 at n=35,126, each needing two image loads to verify), so fixing
-the memory would only expose a worse wall in the verification stage.
-This is why the EyePACS duplicate numbers above are measured at matched
-size rather than dataset-wide.
+`phash_duplicates` originally built a full n×n distance matrix via
+`squareform`: 0.46GB peak at n=6,392, but **13.79GB at n=35,126**, against
+7.8GB of RAM — an O(n²) memory cost for an O(k) answer, invisible at the
+scale it was written against. Now computed a block of rows at a time via
+matrix product (`popcount(a) + popcount(b) − 2(a·b)`), costing 281MB at
+block=2048, and pixel verification runs across 6 processes above 50,000
+candidates. Verified byte-identical to the old implementation at hamming
+≤0, ≤3 and ≤6 including across chunk seams, and reproducing ODIR-5K's
+committed 13,733 candidates exactly, so none of the ODIR-5K numbers above
+moved.
+
+That made the full 35,126-image scan possible (~9 CPU-hours, dominated by
+verifying 1,005,485 candidates). Its cluster-level output is still
+unusable for the chaining reason above — the memory fix removed the
+hardware limit, not the algorithmic one.
 
 ---
 
@@ -668,9 +719,10 @@ the entire EyePACS dataset would have been rejected.
 **The dedupe implementation doesn't scale** (O(n²) memory) — see
 [Level 3](#level-3-neither-split-catches-duplicated-patients).
 
-**Duplicate contamination is two orders of magnitude worse** — 444 pairs
-vs 11, promoted to [Level 3](#level-3-neither-split-catches-duplicated-patients)
-as a finding in its own right rather than a row in a comparison table.
+**Duplicate contamination is far worse** — 69.5 vs 1.7 pairs per 1,000
+images at matched sample size (6,392 each), promoted to
+[Level 3](#level-3-neither-split-catches-duplicated-patients) as a finding
+in its own right rather than a row in a comparison table.
 
 ### Did the adapter abstraction hold?
 

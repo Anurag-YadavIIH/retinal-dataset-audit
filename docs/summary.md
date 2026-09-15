@@ -52,13 +52,23 @@ we forced the compared groups to have the same disease mix, and it reappeared
 for 4 of 5 different held-out sites. It is not a clean per-site guarantee,
 though: any *individual* site's measurement is too imprecise to stand alone.
 
-**3. Neither split catches the same photograph filed under two different
-patient records — and this was far worse in the screening archive.** In a
-like-for-like comparison of equal-sized samples, the Chinese research
-dataset contained 8 such cases; the US screening archive contained **441**.
-We verified these are genuinely the same photographs — matching vessel
-patterns, optic discs, even identical blemishes at the frame edge — some
-differing only in colour balance, as if re-processed or re-uploaded.
+**3. Neither split catches the same eye filed under two different patient
+records — and this was far worse in the screening archive.** Comparing
+equal-sized samples of 6,392 photographs each: the Chinese research
+dataset contained 8 such cases (1.3 per 1,000 images); the US screening
+archive contained **441 (69 per 1,000)** — roughly 50 times the rate.
+Inspected at full resolution, these show the same eye — same vessel
+pattern, same optic disc — differing in colour processing rather than
+being identical files.
+
+Two honest limits on that number. It comes from a *sample* of the
+screening archive, not all 35,126 photographs, so the archive-wide count
+is higher but unmeasured — and it does not scale in proportion, because
+the number of image pairs to compare grows with the square of the
+dataset, so a 5.5x larger archive does not mean 5.5x the duplicates. A
+full scan was attempted and its totals had to be discarded: at that scale
+the grouping step chains merely-similar photographs into implausibly
+large groups.
 
 The important part: **splitting by patient cannot prevent this**, because the
 two copies claim to be different patients. In the screening archive, 58% of

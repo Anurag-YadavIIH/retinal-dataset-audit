@@ -1723,13 +1723,15 @@ Run on a patient-grouped subsample matched to ODIR-5K's exact size (6,392
 images, 3,196 whole patients) so scale is held constant and the threshold
 question is actually answerable:
 
-| (both n=6,392) | ODIR-5K | EyePACS |
+| (both n=6,392 — ODIR-5K's **whole dataset**, EyePACS a **subsample of 35,126**) | ODIR-5K | EyePACS |
 |---|---|---|
 | phash candidates | 13,733 | 31,084 |
 | verified unique pairs | 11 | **444** |
 | duplicate images | 22 | 476 |
 | duplicate clusters | 11 | **118** |
 | same image under two different patient IDs | 8 | **441** |
+| — verified pairs per 1,000 images | 1.7 | **69.5** |
+| — cross-patient per 1,000 images | 1.3 | **69.0** |
 | clusters straddling image_random | 3 (27%) | 75 (64%) |
 | clusters straddling patient_group | 2 (18%) | **68 (58%)** |
 
@@ -1770,3 +1772,63 @@ this project tuned on ODIR-5K (the 0.5 gradability cutoff, and by implication
 the 0.99 embedding cutoff, which fired a fellow-eye false positive on
 EyePACS) is calibrated to a dataset and a preprocessing pipeline, and should
 be recalibrated per dataset rather than inherited.
+
+
+### Item 3 addendum: the full-dataset scan, and two corrections
+
+Two claims made earlier in this file were wrong, and the run that
+produced the correction is worth recording in full.
+
+**The O(n^2) limit was removed, and the numbers above did not move.**
+`phash_duplicates` now computes hamming distances a block of rows at a
+time via matrix product (`popcount(a) + popcount(b) - 2(a.b)`) instead of
+materialising `squareform(pdist(...))`: 281MB at block=2048 rather than
+13.79GB at n=35,126. Pixel verification runs across 6 processes above
+50,000 candidates. Verified byte-identical to the previous
+implementation at hamming <=0, <=3 and <=6 (including with a deliberately
+small block size, to exercise chunk seams) and reproducing ODIR-5K's
+committed 13,733 candidates exactly, so every ODIR-5K number in this
+file is unchanged.
+
+**Correction 1 -- the scaling claim.** Mid-run, with only CPU-time to go
+on, this project's own notes claimed candidates were growing as ~n^2.55
+through "dense cliques of near-identical failed captures". That was
+wrong. The full scan found **1,005,485 candidates** against a
+quadratic-extrapolation prediction of 938,687: **n^2.03**, essentially
+exactly quadratic. The runtime overrun came from per-pair verification
+cost (~32ms CPU/pair, against a 13.5ms serial wall-clock estimate that
+was not a comparable measurement), not from candidate explosion. A
+mechanism was asserted before the measurement that would have tested it.
+
+**Correction 2 -- an over-correction.** Inspecting the full-scan output
+revealed transitive chaining (below), and on that basis the EyePACS
+duplicate finding was briefly declared a threshold artifact altogether.
+That went too far. The evidence offered for it did not hold up: the
+frame-edge "fingerprint" notch is a systematic EyePACS capture artifact
+present across unrelated images, and the fact that the lowest-difference
+pair is a fellow-eye pair shows the metric is noisy, not that every pair
+is spurious. Decisive check: difference maps at full resolution.
+ODIR-5K's *own* near-threshold verified pair (4.89) shows vessel-shaped
+residuals identical in character to EyePACS's, and is unambiguously the
+same eye -- so vessel residual indicates slight re-registration, not
+different eyes. Sampled EyePACS pairs show matching disc position,
+arcade and macula.
+
+**What the full scan does establish.** Its cluster-level output is
+unusable: union-find chained merely-similar images into two clusters of
+1,870 and 1,797 members (max was 46 at n=6,392), five clusters holding
+75% of flagged images, and randomly sampled members of those clusters are
+visibly different eyes measuring 7.9-9.6 apart -- above the 5.0 threshold
+that linked them pairwise. So the dataset-wide duplicate count is higher
+than 444 but **unmeasured**, and the naive full-scan totals (16,782
+pairs, 5,721 images, 492 clusters) are not used anywhere.
+
+**What the EyePACS duplicates are, precisely.** ODIR-5K's verified pairs
+span 0.0037 to 4.89 mean absolute pixel difference and include
+pixel-identical copies (empty difference map). EyePACS has **none below
+2.0** across all 31,084 candidates -- a smooth continuum, not a separated
+population. The defensible claim is therefore "visually indistinguishable
+images differing in colour processing, filed under different patient
+IDs", not "the same photograph filed twice". Both datasets' thresholds
+were calibrated on ODIR-5K; the module docstring's "genuine duplicates
+measured ~0.00-0.01" describes its tightest pairs, not all of them.
