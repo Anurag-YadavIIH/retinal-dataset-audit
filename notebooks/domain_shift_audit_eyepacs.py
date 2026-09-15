@@ -235,11 +235,28 @@ class SiteDataset:
 
 
 def train_site_classifier(
-    manifest: pd.DataFrame, split: dict, class_names: list[str], num_workers: int = 4
+    manifest: pd.DataFrame, split: dict, class_names: list[str], num_workers: int = 2
 ) -> dict:
     """ResNet18 predicting site_label from the image -- same design as
     domain_shift_audit.py's function of the same name (on-the-fly resize
-    to 256/crop 224, identical to this project's train.py transform)."""
+    to 256/crop 224, identical to this project's train.py transform).
+
+    num_workers is deliberately small, and eval loaders use none at all.
+    This machine has 7.8GB of RAM, and every spawned worker is a fresh
+    Windows process that imports torch and reserves ~1.4GB of commit for
+    the CUDA DLLs. A first attempt at num_workers=6 with persistent
+    workers on all three loaders trained all 10 epochs and then died
+    building the test loader:
+
+        OSError: [WinError 1455] The paging file is too small for this
+        operation to complete. Error loading ...\\torch\\lib\\cublas64_12.dll
+
+    It also left 17 orphaned worker processes holding ~24GB of commit
+    between them. Workers only decode JPEGs and run CPU transforms --
+    none of that needs CUDA -- but a CUDA-enabled torch build loads those
+    DLLs on import regardless, so the only lever available here is fewer
+    processes.
+    """
     import torch
     from torch import nn
     from torch.utils.data import DataLoader
@@ -270,19 +287,23 @@ def train_site_classifier(
         ]
     )
 
-    def _loader(paths: list[str], transform, shuffle: bool) -> DataLoader:
+    def _loader(paths: list[str], transform, shuffle: bool, workers: int) -> DataLoader:
         return DataLoader(
             SiteDataset(paths, transform, label_of_path, class_to_idx),
             batch_size=32,
             shuffle=shuffle,
-            num_workers=num_workers,
-            persistent_workers=num_workers > 0,
-            prefetch_factor=4 if num_workers > 0 else None,
+            num_workers=workers,
+            persistent_workers=workers > 0,
+            prefetch_factor=4 if workers > 0 else None,
         )
 
-    train_loader = _loader(split["train"], transform_train, shuffle=True)
-    val_loader = _loader(split["val"], transform_eval, shuffle=False)
-    test_loader = _loader(split["test"], transform_eval, shuffle=False)
+    # Only the training loader gets workers: it runs every epoch and the
+    # augmentation transform is the expensive one. val/test run far less
+    # often, and giving them their own worker pools is exactly what
+    # exhausted commit charge last time.
+    train_loader = _loader(split["train"], transform_train, shuffle=True, workers=num_workers)
+    val_loader = _loader(split["val"], transform_eval, shuffle=False, workers=0)
+    test_loader = _loader(split["test"], transform_eval, shuffle=False, workers=0)
 
     model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
     model.fc = nn.Linear(model.fc.in_features, len(class_names))
@@ -302,31 +323,63 @@ def train_site_classifier(
         pred, true = np.concatenate(all_pred), np.concatenate(all_true)
         return float((pred == true).mean()), pred, true
 
-    best_val_acc, best_state, epochs_without_improvement = -1.0, None, 0
+    # Best weights go to DISK the moment they're found, not just into a
+    # local variable. The previous run trained all 10 epochs, early-stopped
+    # correctly, then crashed building the test loader -- and every one of
+    # those epochs was lost because best_state only ever existed in RAM.
+    # This is the same lesson WALKTHROUGH.md already records from the
+    # manifest-columns crash (checkpoint before the cheap step that can
+    # still fail), applied to the thing that actually cost the most.
+    weights_path = ARTIFACTS / "site_classifier_best.pt"
+    best_val_acc, epochs_without_improvement = -1.0, 0
     max_epochs, patience = 15, 3
-    for epoch in range(1, max_epochs + 1):
-        model.train()
-        t0 = time.perf_counter()
-        for images, labels in train_loader:
-            images, labels = images.to(device), labels.to(device)
-            optimizer.zero_grad()
-            loss = criterion(model(images), labels)
-            loss.backward()
-            optimizer.step()
-        val_acc, _, _ = _eval(val_loader)
-        elapsed = time.perf_counter() - t0
-        logger.info("Epoch %d/%d: %.1fs, val acc=%.4f", epoch, max_epochs, elapsed, val_acc)
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-            epochs_without_improvement = 0
-        else:
-            epochs_without_improvement += 1
-            if epochs_without_improvement >= patience:
-                logger.info("Early stopping after epoch %d", epoch)
-                break
 
-    model.load_state_dict(best_state)
+    if weights_path.exists():
+        logger.info("Resuming from saved best weights at %s (skipping training)", weights_path)
+        ckpt = torch.load(weights_path, map_location=device)
+        model.load_state_dict(ckpt["state_dict"])
+        best_val_acc = float(ckpt["best_val_acc"])
+        logger.info("Restored weights with val acc=%.4f", best_val_acc)
+    else:
+        for epoch in range(1, max_epochs + 1):
+            model.train()
+            t0 = time.perf_counter()
+            for images, labels in train_loader:
+                images, labels = images.to(device), labels.to(device)
+                optimizer.zero_grad()
+                loss = criterion(model(images), labels)
+                loss.backward()
+                optimizer.step()
+            val_acc, _, _ = _eval(val_loader)
+            elapsed = time.perf_counter() - t0
+            logger.info("Epoch %d/%d: %.1fs, val acc=%.4f", epoch, max_epochs, elapsed, val_acc)
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                torch.save(
+                    {
+                        "state_dict": {
+                            k: v.detach().cpu().clone() for k, v in model.state_dict().items()
+                        },
+                        "best_val_acc": best_val_acc,
+                        "epoch": epoch,
+                        "class_names": class_names,
+                    },
+                    weights_path,
+                )
+                logger.info("  saved new best to %s", weights_path.name)
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+                if epochs_without_improvement >= patience:
+                    logger.info("Early stopping after epoch %d", epoch)
+                    break
+
+        model.load_state_dict(torch.load(weights_path, map_location=device)["state_dict"])
+
+    # Free the training loader's worker processes before the test pass:
+    # on a 7.8GB machine, holding them open while the eval loader runs is
+    # what produced the WinError 1455 above.
+    del train_loader, val_loader
     test_acc, pred, true = _eval(test_loader)
     cm = confusion_matrix(true, pred, labels=list(range(len(class_names))))
 
