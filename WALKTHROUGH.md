@@ -799,10 +799,18 @@ unexplained exception, which is a fine place to leave it.
 Stated plainly, because an interviewer will find these anyway and finding
 them first is the better position:
 
-- **Single dataset.** Everything here is ODIR-5K. No external validation
-  set, no cross-dataset generalisation claim. A leakage effect measured on
-  one dataset's specific camera mix, label noise, and patient demographics
-  may not transfer in magnitude to another.
+- **~~Single dataset.~~ Now externally validated — with limits.** This
+  read "everything here is ODIR-5K, no cross-dataset generalisation
+  claim" until the audit was re-run end to end on EyePACS (35,126
+  images, 17,563 patients, a US telemedicine screening network). The
+  structural findings replicate: patient-level leakage 45.9% vs 46.5%
+  like-for-like, bilateral correlation +25.5 vs +27.3 points over
+  chance, and site recoverability *stronger* than ODIR-5K's (93.2% vs
+  84.0% against near-identical baselines, χ²=139.6 vs 115.2). What does
+  **not** transfer is every tuned threshold — see §11. Still only two
+  datasets, both diabetic-retinopathy-weighted, and EyePACS's site
+  labels are the same resolution *proxy*, not ground-truth camera
+  metadata, so "site" remains a lower bound on distinct sources in both.
 - **Binary task.** Normal/abnormal collapses 8 original categories.
   Assessed (not measured) to likely *understate* true bilateral-leakage
   sensitivity relative to a per-disease task — see §5.
@@ -838,6 +846,156 @@ them first is the better position:
   observations, however consistent in direction, is too few and each
   too small on its own to call this a precise, universal per-site
   estimate of a production model's site-level generalisation gap.
+
+---
+
+## 11. External validation on a second dataset (EyePACS)
+
+**Why this was worth the compute.** Every finding above rests on ODIR-5K,
+and the site result has an obvious deflationary reading: ODIR-5K
+aggregates several Chinese centres with mixed camera stock, so a
+recoverable "site" signal could be an artifact of *that aggregation*
+rather than a property of fundus imaging. If so, the project's central
+claim — patient-level splitting is necessary but insufficient — would be
+parochial. The only way to settle it is a second dataset with a
+different population, different equipment and a different collection
+protocol.
+
+**Choosing it (and what the survey ruled out).** EyePACS, APTOS 2019,
+IDRiD, RFMiD, BRSET and Messidor were checked *before* downloading
+anything, because the full EyePACS competition is ~82GB. Only EyePACS
+combines per-image patient IDs, enough scale, and immediate
+availability. APTOS and RFMiD publish image IDs only — which kills the
+leakage half of the comparison. That one is worth a sentence at
+interview: a web summary confidently stated RFMiD ships patient and eye
+columns, and downloading its actual 183KB label CSV showed 46 disease
+columns and no patient field at all. Checking the primary artifact cost
+one minute and prevented a wasted 8GB download and a wrong conclusion.
+IDRiD is single-camera, single-clinic (516 images — no site
+heterogeneity to find *by construction*). BRSET has ideal structure but
+needs PhysioNet credentialing. Only the labelled train split was pulled:
+35,126 images, ~32.6GB instead of ~82GB, because every check needs one
+labelled pool with patient IDs, not a train/test comparison.
+
+**Did the adapter abstraction hold?** Largely, and the exceptions are
+the interesting part. `ingest.py` needed no changes — it dispatches on
+`cfg["dataset"]["name"]` and `adapters/__init__.py` auto-discovers
+adapter modules via `pkgutil`, so a new dataset genuinely is one new
+file. `quality.py`, `dedupe.py`, `splits.py`, `train.py` and
+`experiment.py` contain no dataset-specific logic and were untouched.
+One shared helper moved: `odir5k.py`'s private `_subsample_by_patient`
+was needed verbatim, so it became `subsample_by_patient` in
+`adapters/base.py`. That is a DRY fix a second adapter makes visible,
+not a failure of the manifest contract.
+
+### The result
+
+| | ODIR-5K | EyePACS |
+|---|---|---|
+| Patients straddling `image_random` (two-eye only) | 46.5% | 45.9% |
+| Fellow-eye concordance, lift over chance | +27.3 pts | +25.5 pts |
+| **Site-classifier accuracy** | **0.8397** | **0.9317** |
+| Majority-class baseline | 0.2932 | 0.2958 |
+| **Site vs diagnosis** | χ²=115.2 | **χ²=139.6** |
+
+**Site is more recoverable in EyePACS than in ODIR-5K**, on a test set
+5.5x larger, from a single US screening network rather than a
+multi-centre aggregation. The deflationary reading is dead.
+
+Two comparisons would have been wrong if taken at face value, and both
+are good interview material:
+
+- **Leakage** looks like 42.0% vs 45.9%. But ODIR-5K has 324 single-eye
+  patients who *cannot* straddle a split by construction; EyePACS has
+  none. Restricted to two-eye patients the numbers are 46.5% vs 45.9% —
+  the "difference" was a denominator artifact.
+- **Concordance** looks like 77.8% vs 94.0%, a 16-point gap. But
+  EyePACS is 80/20 normal against ODIR-5K's 55/45, so its chance floor
+  is 68.5% rather than 50.5%. Lift over chance is +27.3 vs +25.5. The
+  bilateral signal is nearly identical; the raw numbers were measuring
+  class balance.
+
+### What did not transfer, and the mistake I nearly published
+
+Quality thresholds don't transfer — but the first version of that
+finding was badly misleading, and catching it is the part worth
+explaining. Naively EyePACS rejects 16.9% of images against ODIR-5K's
+0.7%: a 24x gap that reads as "EyePACS is far worse quality." The
+control that killed it: push ODIR-5K's *own raw images* through the
+identical LANCZOS→512×512 path EyePACS went through, and its reject rate
+moves 0.7% → 7.4%, median gradability 0.879 → 0.740, with no change
+whatsoever to the photographs. Fair comparison is 2.3x, not 24x.
+
+Roughly half the apparent gap was *preprocessing history*, not image
+quality. This is `variance_of_laplacian`'s own documented failure mode —
+"it ranks cameras, not sharpness" — entering one level earlier than the
+module can defend against, since its internal resize cannot undo a
+resize that already happened. The metric transfers; the absolute 0.5
+cutoff is calibrated to a pipeline.
+
+A related pleasure: 99.6% of EyePACS images trip `fov_clipped` (vs 6.9%
+of ODIR-5K's — they're truncated ovals). `quality.py` deliberately does
+*not* gate rejection on that flag, a decision made on ODIR-5K evidence
+alone after circularity was found to conflate oval crops with real
+truncation. Had it gated, essentially all of EyePACS would have been
+rejected. An earlier judgement call turned out to be load-bearing for a
+dataset it was never tested against.
+
+### Duplicates: the largest divergence
+
+At matched size (6,392 images, patients kept whole), EyePACS has **444
+verified duplicate pairs against ODIR-5K's 11**, and **441 cases of the
+same image filed under two different patient IDs** against ODIR-5K's 8.
+
+The obvious confound was tested before believing it: EyePACS has many
+near-black failed captures, and two blank frames would pass both the
+phash and the pixel-difference check while being unrelated photographs.
+Duplicates *are* enriched for dark, low-quality images (median intensity
+50.6 vs 73.3) — but not explained by them (median duplicate score 0.569,
+minimum 0.271, not 0.00). Settled by eye, as ODIR-5K's phash
+false-positive investigation was: a sampled contact sheet shows
+unmistakably identical photographs — matching vessel trees, optic disc
+positions, frame-edge notches — several differing only in white balance.
+
+**The sharpest consequence: 68 of 118 duplicate clusters (58%) straddle
+a `patient_group` split, and patient-grouping cannot prevent it.** The
+two copies are *declared to be different patients*, so grouping on
+`patient_id` is structurally incapable of keeping them together. §7
+already argued dedupe closes a gap splitting cannot; EyePACS
+demonstrates it at 34x the cluster count in a real screening archive.
+
+### A scaling limit found the hard way
+
+`phash_duplicates` builds a full n×n distance matrix via `squareform`:
+0.46GB at ODIR-5K's n=6,392, but **13.79GB at EyePACS's n=35,126**
+against 7.8GB of RAM. An O(n²) memory bug invisible at the scale it was
+written against. Deliberately *not* rewritten: candidate counts scale
+with n² as well (31,084 candidates at n=6,392 implies ~930,000 at
+n=35,126, each needing two image loads to verify), so fixing the memory
+would only expose a worse wall downstream. The honest answer was to run
+the comparison at matched size and report the scaling limit as a
+finding.
+
+### Process failures worth owning
+
+Two, both mine, both instructive.
+
+First, I set `num_workers=6` to speed up data loading after measuring
+that the GPU sat idle ~90% of the time. It trained all 10 epochs and
+then died building the test loader: `WinError 1455, the paging file is
+too small`. This machine has 7.8GB of RAM and each spawned worker
+imports torch and reserves ~1.4GB for CUDA DLLs. The optimisation was
+made without checking the memory budget, and it orphaned 17 worker
+processes holding ~24GB of commit between them.
+
+Second, and worse: that run lost ~70 minutes of *correct* training
+because `best_state` existed only in RAM. §9's process note already
+records this exact lesson from the manifest-columns crash — checkpoint
+before the cheap step that can still fail — but it had never been
+applied to the expensive step itself. Best weights now go to disk the
+moment they improve, and the script resumes from them; verified by
+reloading the 42.7MB checkpoint into a fresh ResNet18 rather than
+assuming it worked.
 
 ---
 

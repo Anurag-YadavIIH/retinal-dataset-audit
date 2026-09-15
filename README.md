@@ -24,6 +24,19 @@ the level above it. That is a more general and more useful claim than
 patient-level leakage work below is the first rung, not the whole
 story.
 
+**Externally validated on a second dataset.** The obvious objection to
+the site finding was that ODIR-5K aggregates several Chinese centres
+with mixed camera stock, so a recoverable "site" signal might be an
+artifact of that aggregation. Re-running the whole audit on **EyePACS**
+(35,126 images, 17,563 patients — a US telemedicine screening network,
+different population, equipment and protocol) says otherwise: site is
+recoverable there at **93.2% against a 29.6% baseline**, *stronger* than
+ODIR-5K's 84.0%, on a test set 5.5x larger, and still entangled with
+diagnosis (χ²=139.6, p=2.5e-23). Patient-level leakage (45.9% vs 46.5%
+like-for-like) and bilateral correlation (+25.5 vs +27.3 points over
+chance) replicate almost exactly. The curation *thresholds* do not
+transfer — see [External validation](#external-validation-eyepacs).
+
 The model here is deliberately boring. The data path is the contribution.
 
 **Live reports:** [combined QC & findings report](https://anurag-yadaviih.github.io/retinal-dataset-audit/qc_report.html)
@@ -457,6 +470,117 @@ untestable at n=5). site_4 stays an unexplained exception.
 
 ---
 
+## External validation: EyePACS
+
+Everything above is measured on ODIR-5K. The natural objection to the
+site finding is that ODIR-5K *aggregates multiple Chinese centres with
+mixed camera stock*, so "site" could be an artifact of that aggregation
+rather than a property of fundus imaging. The test: re-run the whole
+audit on a second dataset with a different population, different
+equipment and a different collection protocol.
+
+**EyePACS** (Kaggle `diabetic-retinopathy-detection`, train split):
+35,126 images, 17,563 patients, one US telemedicine screening network.
+Adding it required writing one adapter function — `ingest`, `quality`,
+`dedupe`, `splits`, `train` and `experiment` needed no changes at all
+(the one shared helper that moved is noted below).
+
+### What transfers
+
+| | ODIR-5K | EyePACS |
+|---|---|---|
+| Patients straddling `image_random` (two-eye patients) | 46.5% | **45.9%** |
+| Fellow-eye concordance, lift over chance | +27.3 pts | **+25.5 pts** |
+| **Site-classifier accuracy** | 0.8397 | **0.9317** |
+| Majority-class baseline | 0.2932 | 0.2958 |
+| **Site vs diagnosis** | χ²=115.2, p=8.8e-16 | **χ²=139.6, p=2.5e-23** |
+
+**Site identity is recoverable from normalised fundus images in both
+datasets — more strongly in EyePACS, on a test set 5.5x larger.** The
+deflationary reading is dead: this is a property of fundus imaging, not
+of ODIR-5K's particular mix of centres. Patient-level splitting is
+necessary but insufficient *in general*.
+
+Two comparisons needed care to avoid manufacturing a difference that
+isn't there:
+
+- **Leakage**: raw rates are 42.0% vs 45.9%, but that gap is entirely
+  ODIR-5K's 324 single-eye patients, who cannot straddle by
+  construction. Restricted to two-eye patients: 46.5% vs 45.9%.
+- **Concordance**: raw rates are 77.8% vs 94.0% — a 16-point "difference"
+  that is almost pure class balance (EyePACS is 80/20, so its chance
+  floor is 68.5% rather than 50.5%). Lift over chance is what replicates.
+
+### What does not transfer
+
+**The quality threshold is calibrated to a preprocessing pipeline, not
+just a dataset.** Naively EyePACS rejects 16.9% of images against
+ODIR-5K's published 0.7% — a 24x gap. But those numbers describe images
+that reached 512×512 by different routes. Pushing ODIR-5K's *own raw
+images* through the identical LANCZOS path moves its reject rate to
+7.4%, with no change to the photographs:
+
+| condition | median score | reject rate |
+|---|---|---|
+| ODIR-5K as shipped | 0.879 | 0.7% |
+| ODIR-5K raw → LANCZOS 512 | 0.740 | 7.4% |
+| EyePACS raw → LANCZOS 512 | 0.613 | 16.9% |
+
+Fair comparison: **2.3x, not 24x.** The gradability *metric* transfers
+fine (its extremes are correct on EyePACS); the absolute 0.5 cutoff does
+not.
+
+**An ODIR-5K-only design decision turned out to be load-bearing.** 99.6%
+of EyePACS images trip `fov_clipped` (vs 6.9% of ODIR-5K's) — they're
+truncated ovals. `quality.py` deliberately doesn't gate rejection on that
+flag, a call made on ODIR-5K evidence alone. Had it gated, essentially
+the entire EyePACS dataset would have been rejected.
+
+**The dedupe implementation doesn't scale.** `phash_duplicates` builds a
+full n×n matrix: 0.46GB at n=6,392, but **13.79GB at n=35,126** — an
+O(n²) memory problem invisible at the scale it was written against.
+
+### Duplicates: the largest divergence
+
+Run on a patient-grouped subsample matched to ODIR-5K's exact size, so
+scale is held constant:
+
+| (both n=6,392) | ODIR-5K | EyePACS |
+|---|---|---|
+| Verified duplicate pairs | 11 | **444** |
+| Duplicate clusters | 11 | **118** |
+| Same image under two different patient IDs | 8 | **441** |
+| Clusters straddling `patient_group` | 2 (18%) | **68 (58%)** |
+
+Checked against the obvious confound (EyePACS has many near-black failed
+captures, and two blank frames would fool both phash and pixel
+difference) — duplicates are somewhat enriched for dark images, but not
+explained by them, and a sampled contact sheet shows unmistakably
+identical photographs: matching vessel trees, optic discs and frame-edge
+notches, several differing only in white balance.
+
+**58% of duplicate clusters straddle a patient-grouped split, and
+patient-grouping cannot prevent it** — the two copies are declared to be
+*different patients*, so grouping on `patient_id` is structurally
+incapable of keeping them together. This project already argued dedupe
+closes a gap splitting cannot; EyePACS shows it at 34x the cluster count
+in a real-world screening archive.
+
+### Did the adapter abstraction hold?
+
+Mostly yes, reported honestly. `ingest.py` needed zero changes — it
+dispatches on `cfg["dataset"]["name"]`, and `adapters/__init__.py`
+auto-discovers adapter modules, so a new dataset really is one new file.
+`quality.py`, `dedupe.py`, `splits.py`, `train.py` and `experiment.py`
+contain no dataset-specific logic and were untouched.
+
+One real change elsewhere: `odir5k.py` had a private
+`_subsample_by_patient` that EyePACS needed verbatim, so it moved to a
+shared `subsample_by_patient` in `adapters/base.py`. A minor DRY fix a
+second adapter makes visible — not a crack in the manifest contract.
+
+---
+
 ## Why patient-level splitting matters in ophthalmology specifically
 
 Two reasons that do not apply as strongly in other imaging domains:
@@ -657,7 +781,7 @@ Deliberately not built yet. Listed so the scope is honest rather than padded.
 - [ ] Inter-grader agreement (Dice, IoU) using DRIVE's second-observer set
 - [ ] DICOM PHI stripping and burned-in patient-text detection on the image itself
 - [x] Cross-camera domain shift audit via a site classifier — done, see below
-- [ ] EyePACS adapter to demonstrate the adapter layer generalises
+- [x] EyePACS adapter + full external validation of the audit on a second dataset — done, see "External validation: EyePACS" above
 - [x] Site-level splitting (arm E), motivated directly by the audit above — done, see "Rungs 2 and 3" above
 
 ---
