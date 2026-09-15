@@ -522,12 +522,15 @@ inspection:
   5.5x more chances to match something, so both true discoveries *and*
   false positives rise faster than dataset size.
 - **Transitive chaining corrupts the clusters at that scale.** Union-find
-  merges A~B and B~C into one cluster. At n=6,392 the largest cluster
-  held 46 images; at n=35,126 two clusters held **1,870 and 1,797**, and
-  five clusters held 75% of all flagged images. Sampling those giant
-  clusters at random shows *visibly different eyes* — members that are
-  not duplicates of each other measure 7.9-9.6 apart, well above the 5.0
-  threshold that linked them pairwise.
+  implements single-linkage: A~B and B~C merge into one cluster however
+  far apart A and C are. At n=6,392 the largest cluster held 46 images;
+  at n=35,126 two clusters held **1,870 and 1,797**, and five clusters
+  held 75% of all flagged images, with sampled members measuring 7.9-9.6
+  apart — above the 5.0 threshold that supposedly defines membership.
+  This is a defect in the *method*, not the threshold, and it is
+  invisible below the density at which chains form. Full write-up,
+  including why a smaller threshold is the wrong fix and what to
+  implement instead: **WALKTHROUGH.md §12**.
 
 So: the dataset-wide count is **higher than 444 but unmeasured**, and the
 naive full-scan figures (16,782 pairs, 5,721 images, 492 clusters) are
@@ -653,7 +656,12 @@ moved.
 That made the full 35,126-image scan possible (~9 CPU-hours, dominated by
 verifying 1,005,485 candidates). Its cluster-level output is still
 unusable for the chaining reason above — the memory fix removed the
-hardware limit, not the algorithmic one.
+hardware limit, not the algorithmic one. **WALKTHROUGH.md §12** covers
+that defect on its own terms, along with the two corrections this episode
+forced (a mechanism asserted before it was measured, then an
+over-correction), the cross-dataset calibration trick that resolved them,
+and what the two datasets' distance distributions imply about *how* each
+came to contain duplicates.
 
 ---
 

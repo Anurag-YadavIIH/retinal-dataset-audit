@@ -1003,6 +1003,187 @@ assuming it worked.
 
 ---
 
+## 12. Transitive chaining: a dedupe defect that only appears at scale
+
+This one is worth reading even if you never touch fundus data. It is a
+defect in the *method*, not in a threshold or a dataset, it is invisible
+at small n, and anyone who builds duplicate detection by thresholding
+pairwise distances and then grouping the survivors will eventually hit
+it.
+
+### The mechanism
+
+`dedupe.py` finds duplicate *pairs* by thresholding a distance, then
+groups them into clusters with union-find. Union-find implements
+**single-linkage**: if A~B is a link and B~C is a link, A, B and C become
+one cluster — regardless of how far apart A and C actually are. Nothing
+ever checks A against C.
+
+For a threshold to mean anything, a cluster should be a set of images
+that are all duplicates of each other. Single-linkage does not produce
+that. It produces sets connected by *some* path of short hops, which is a
+much weaker property, and the difference between the two grows with the
+density of links.
+
+### The numbers
+
+The same code, the same threshold, the same dataset — only n changes:
+
+| | n=6,392 (subsample) | n=35,126 (full) |
+|---|---|---|
+| Largest cluster | 46 images | **1,870 images** |
+| Second largest | — | **1,797 images** |
+| Clusters ≥100 images | 0 | 5, holding **75% of all flagged images** |
+| Median cluster size | 2 | 2 |
+
+The median never moved. Most clusters are still honest pairs. But five
+clusters swallowed three-quarters of the flagged images.
+
+Randomly sampled members *within* those giant clusters measure **7.9–9.6
+apart** — above the 5.0 threshold that supposedly defines membership.
+They were never compared to each other; they were linked through
+intermediaries. Sampled visually, they are plainly different eyes that
+share a tone and a framing.
+
+So at n=35,126 the word "cluster" stopped meaning what the threshold
+defines, and the counts built on it — **16,782 pairs, 5,721 images, 492
+clusters** — are inflated and are not used anywhere in this project.
+
+### Why the subsample hid it completely
+
+Chains need density. A chain A~B~C~D requires every consecutive link to
+exist, and link count grows with the *square* of dataset size while image
+count grows linearly: 31,084 candidate pairs at n=6,392 became 1,005,485
+at n=35,126 (n^2.03). Each image therefore has ~5.5x more neighbours
+within threshold in the full dataset, which is exactly the condition
+under which long chains stop being rare and start being inevitable.
+
+This is the uncomfortable part: **the subsample was not a smaller version
+of the same result, it was a qualitatively different regime.** Validating
+a clustering method at one scale says very little about its behaviour at
+another, and nothing at all about a failure mode whose trigger *is*
+scale.
+
+### A smaller threshold is not the fix
+
+The obvious reaction — tighten the threshold until the giant clusters
+break up — treats a symptom. Chaining is a property of single-linkage,
+not of where the cutoff sits: a tighter threshold thins the link graph so
+chains need more data to form, but the failure returns at larger n, now
+harder to notice because the clusters look reasonable for longer. On this
+data it would also be actively destructive, since EyePACS has no pairs
+below 2.0 at all, so tightening toward ODIR-5K's near-zero duplicates
+discards the entire finding rather than cleaning it.
+
+**What would actually work**, in increasing order of cost:
+
+1. **Complete-linkage within each connected component.** Build components
+   with union-find as now, then inside each one require that *every* pair
+   is within threshold, splitting until that holds.
+2. **A diameter constraint**, rejecting or flagging any component whose
+   maximum internal distance exceeds the threshold.
+3. **Maximal-clique enumeration** on the threshold graph, which is the
+   exact formulation of "everyone is a duplicate of everyone".
+
+**I would implement (1).** It enforces precisely the property the
+threshold is supposed to assert, which is the actual defect, and it is
+affordable where it needs to be: connected components are cheap to build,
+and the O(k²) all-pairs check is only paid inside each component — which
+is negligible for the 2-image clusters that dominate, and concentrated
+exactly on the pathological ones that deserve the scrutiny. Option (2)
+diagnoses the problem without repairing it: it tells you a cluster is
+untrustworthy but not what the honest sub-clusters are. Option (3) is the
+theoretically exact answer but NP-hard in general, and buys little over
+(1) once components are small.
+
+Deliberately not implemented here. This project's duplicate claims are
+reported at the **pair** level, and pairs are individually verified and
+cannot chain — so the defect changes no number that is actually used. The
+right time to build (1) is when cluster-level output is needed at scale,
+and it should be validated at full n, because the subsample regime above
+demonstrates that passing at small n proves nothing.
+
+### Two corrections, a day apart, in opposite directions
+
+Both errors came from reasoning about numbers instead of looking at
+images, and they failed in mirror-image ways.
+
+**Over-claiming.** Mid-run, with the job still going and only CPU-time to
+go on, I inferred that candidates were growing as ~n^2.55 and offered a
+mechanism: dense cliques of near-identical failed captures. The full scan
+measured 1,005,485 candidates against a quadratic prediction of 938,687 —
+**n^2.03, essentially exactly quadratic.** The runtime overrun was
+per-pair verification cost, not candidate count. I proposed a mechanism
+before running the measurement that would have tested it.
+
+**Over-correcting.** A day later, on discovering the chaining above, I
+declared the EyePACS duplicate finding a threshold artifact outright.
+That was equally unfounded. The two pieces of evidence I leaned on
+dissolve on inspection: the frame-edge "fingerprint" notch is a
+systematic EyePACS capture artifact appearing across unrelated images
+(so it proves nothing either way), and the fact that the
+lowest-difference pair is a patient's own two eyes shows the metric is
+*noisy*, not that every pair above it is spurious.
+
+The pattern worth extracting: the first error trusted a number without an
+image, and the second trusted a different number without an image. **Both
+were resolved in minutes by rendering the actual photographs** — first
+the giant clusters (different eyes, chaining confirmed), then
+full-resolution difference maps (same eyes, finding restored).
+
+### The technique that settled it: cross-dataset calibration
+
+The difference maps were initially unreadable. Every EyePACS pair showed
+bright vessel-shaped residuals, and I could not tell whether that meant
+"different eyes" or "same eye, slightly re-registered" — the whole
+question, and a scalar distance cannot answer it.
+
+What resolved it was a **known-good case from the other dataset**.
+ODIR-5K has a verified duplicate pair sitting near the threshold at 4.89,
+independently confirmed genuine, and it is unambiguously the same eye.
+Its difference map shows vessel-shaped residuals *identical in character*
+to EyePACS's. That fixes the interpretation: on this modality, vessel
+residual indicates sub-pixel registration shift, not different eyes.
+
+Generalising the move: **when a diagnostic is ambiguous on the dataset
+you are judging, calibrate it on a confirmed example from a dataset where
+you already know the answer.** ODIR-5K's byte-identical duplicates and
+its near-threshold duplicate together span the range and turn an
+unreadable image into a readable one. It costs one lookup and it converts
+an argument into an observation. This project needed two datasets for its
+headline result anyway; that it also supplied a calibration standard was
+an unplanned benefit of having one.
+
+### What the distance distributions imply about provenance
+
+One further observation, **flagged as an inference from the distance
+distribution rather than something confirmed** — no provenance metadata
+was consulted, and none is published with either dataset.
+
+- **ODIR-5K**: verified pairs span 0.0037 to 4.89, and the tightest are
+  pixel-identical — an empty difference map.
+- **EyePACS**: across all 31,084 candidates, **not one pair falls below
+  2.0**. The 444 verified pairs occupy 2.0–5.0 in a smooth continuum.
+
+A pixel-identical pair is most simply explained by the same file being
+stored twice. A population that never gets closer than 2.0, yet shows the
+same eye with matching disc, arcade and macula, is most simply explained
+by the same capture being re-exported or re-graded — a colour or
+compression change applied once, which cannot produce a zero difference
+however identical the underlying photograph.
+
+If that reading is right, the two datasets are exhibiting **different
+duplication mechanisms**: literal file duplication in the curated
+research collection, versus re-processing and re-enrolment of the same
+capture in the operational screening archive. That would fit how the two
+were assembled, and it would mean a dedupe threshold calibrated on
+file-level duplicates is structurally mismatched to an archive whose
+duplicates are re-processed. Consistent with the evidence, not
+established by it — confirming it needs provenance data neither dataset
+ships.
+
+---
+
 ## Interview questions
 
 1. **Why does patient-level splitting matter more here than in, say, chest
