@@ -14,35 +14,56 @@ h1 { border-bottom: 2px solid #eee; padding-bottom: 0.5rem; }
 .card h2 { margin: 0 0 0.3rem 0; font-size: 1.1rem; color: #2C4870; }
 .card p { margin: 0; color: #555; font-size: 0.95rem; }
 .note { color: #666; font-style: italic; font-size: 0.9rem; }
+table { border-collapse: collapse; width: 100%; margin: 1.2rem 0; font-size: 0.9rem; }
+th, td { border: 1px solid #ddd; padding: 7px 9px; text-align: left; vertical-align: top; }
+th { background: #f5f5f5; }
 footer { margin-top: 2.5rem; font-size: 0.85rem; color: #777; }
 a { color: #2C4870; }
 </style></head>
 <body>
 <h1>RetinaPrep: retinal fundus leakage audit</h1>
 <p>
-  A curation and leakage-audit pipeline for retinal fundus datasets,
-  built around one finding: leakage in retinal imaging has <strong>three
-  rungs, not one</strong>, each necessary and, alone, insufficient.
-  <strong>Image-level splitting leaks patients</strong> (42.0% of ODIR-5K's
-  patients land on both sides of a naive split). <strong>Patient-level
-  splitting leaks sites instead</strong> — a classifier recovers which of
-  20 camera/centre clusters an image came from with 84% accuracy from a
-  patient-grouped split alone, and site correlates with diagnosis
-  (chi2=115.18, p=8.8e-16). Only <strong>site-level splitting isolates the
-  signal</strong>: holding out entire sites drops AUROC by 0.0557 — over
-  3x the patient-level effect, Bonferroni-significant, and shown directly
-  (not just diagnosed) to generalize across most held-out sites, not just
-  the one that happened to land in the original split. Full write-up,
-  headline numbers, and methodology are in the
+  Fundus datasets leak at <strong>three levels, and each level of
+  protection is insufficient for the next</strong> — measured end to end
+  on two independent datasets: ODIR-5K (6,392 images, multi-centre
+  Chinese) and EyePACS (35,126 images, a US telemedicine screening
+  network).
+</p>
+
+<table>
+  <tr><th></th><th>The leak</th><th>ODIR-5K</th><th>EyePACS</th></tr>
+  <tr><td><strong>1</strong></td><td>Image-level splits leak <strong>patients</strong></td>
+      <td>42.0% cross a fold<br>(46.5% of two-eye patients)</td><td><strong>45.9%</strong></td></tr>
+  <tr><td><strong>2</strong></td><td>Patient-level splits leak <strong>sites</strong></td>
+      <td>84.0% recoverable vs 29.3% chance;<br>&chi;&sup2;=115.2 vs diagnosis</td>
+      <td><strong>93.2%</strong> vs 29.6%;<br>&chi;&sup2;=139.6</td></tr>
+  <tr><td><strong>3</strong></td><td>Neither catches <strong>duplicated patients</strong></td>
+      <td>11 pairs, 8 cross-patient</td><td><strong>444 pairs,<br>441 cross-patient</strong></td></tr>
+</table>
+
+<p>
+  The third row is the one to read twice: patient-grouped splitting —
+  what most papers mean by "we split properly" — <strong>cannot</strong>
+  catch one photograph filed under two patient IDs. In EyePACS, 58% of
+  duplicate clusters straddle a patient-grouped split anyway.
+</p>
+<p class="note">
+  Stated up front rather than buried: the downstream AUROC cost of
+  level-1 leakage is small and <em>did not replicate cleanly</em>; "site"
+  is a resolution-derived proxy, not camera metadata, in both datasets;
+  every individual held-out site's confidence interval spans zero; and
+  the duplicate finding shows contamination exists, not that any
+  specific published result was affected. Full write-up, headline
+  numbers and methodology are in the
   <a href="https://github.com/Anurag-YadavIIH/retinal-dataset-audit">GitHub repository</a>'s
   README and WALKTHROUGH.md.
 </p>
 
 <a class="card" href="qc_report.html">
   <h2>Combined QC &amp; findings report &rarr;</h2>
-  <p>Start here. Headline result, dataset overview, all eight leakage-audit
-  findings — including the three-rung hierarchy and leave-one-site-out
-  sweep — quality/dedupe panels, and the results table in one page.</p>
+  <p>Start here. Headline result, dataset overview, all nine leakage-audit
+  findings — including the cross-dataset site comparison, the three-rung
+  hierarchy and the leave-one-site-out sweep — quality/dedupe panels, and the results table in one page.</p>
 </a>
 
 <a class="card" href="eda_report.html">
@@ -55,7 +76,8 @@ a { color: #2C4870; }
 <a class="card" href="findings_report.html">
   <h2>Leakage-audit findings, charted &rarr;</h2>
   <p>Patient overlap, fellow-eye concordance, the 4-arm results, the
-  A-vs-B non-replication, the three-rung hierarchy (A vs B vs E), the
+  A-vs-B non-replication, the cross-dataset site comparison (ODIR-5K vs
+  EyePACS), the three-rung hierarchy (A vs B vs E), the
   leave-one-site-out sweep with site_4's exception shown plainly, the
   training-overlap falsification test, and the cosine-similarity
   separation behind the dedupe threshold.</p>
@@ -64,8 +86,9 @@ a { color: #2C4870; }
 <a class="card" href="https://github.com/Anurag-YadavIIH/retinal-dataset-audit/blob/main/docs/summary.md">
   <h2>One-page clinical summary &rarr;</h2>
   <p>For a reader deciding whether to trust a reported accuracy number,
-  not the engineering team — what the three-rung leakage finding means for
-  deploying a model at a new site, in plain language.</p>
+  not the engineering team — what the three-level leakage finding means for
+  deploying a model at a new site, in plain language — now covering both
+  datasets.</p>
 </a>
 
 <p class="note">

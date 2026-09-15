@@ -99,6 +99,19 @@ LOSO_SITES = {
     "site_4": {"n_test": 336, "gap": 0.02084353980306508, "se_gap": 0.0759},
 }
 
+# Cross-dataset external validation (item 3): ODIR-5K's committed
+# domain_shift_audit.json vs EyePACS's, both produced by the structurally
+# identical audit (notebooks/domain_shift_audit.py and
+# domain_shift_audit_eyepacs.py). Literals for the same reason as the
+# constants above -- the EyePACS classifier is a multi-hour training run
+# over a 35,126-image dataset that lives outside this repo on D:, so it
+# cannot be recomputed from a clean artifacts/ directory the way the
+# ODIR-5K numbers can (docs/notes.md, "Item 3").
+CROSS_DATASET = {
+    "odir5k": {"site_acc": 0.8397, "site_baseline": 0.2932, "chi2": 115.18, "n_test": 1279},
+    "eyepacs": {"site_acc": 0.9317, "site_baseline": 0.2958, "chi2": 139.60, "n_test": 7026},
+}
+
 
 def _fig_to_base64(fig) -> str:
     buf = io.BytesIO()
@@ -297,6 +310,58 @@ def fig_ab_replication() -> tuple[str, str]:
         f"correction across the family this project holds every claim to. Three draws, "
         f"one direction, no draw individually conclusive: this is what n=5 seeds being "
         f"underpowered looks like when actually re-drawn twice, not argued from theory once."
+    )
+    return _fig_to_base64(fig), takeaway
+
+
+def fig_cross_dataset_site() -> tuple[str, str]:
+    """The single most persuasive chart available: site-classifier accuracy
+    against its own majority-class baseline, on two independent datasets.
+
+    Plotted against baselines rather than alone because the accuracies are
+    only meaningful relative to them -- and the baselines happen to be
+    nearly identical (0.2932 vs 0.2958), which is what makes the two bars
+    directly comparable at a glance."""
+    datasets = [
+        "ODIR-5K\n(6,392 imgs, CN\nmulti-centre)",
+        "EyePACS\n(35,126 imgs, US\nscreening network)",
+    ]
+    acc = [CROSS_DATASET["odir5k"]["site_acc"], CROSS_DATASET["eyepacs"]["site_acc"]]
+    base = [CROSS_DATASET["odir5k"]["site_baseline"], CROSS_DATASET["eyepacs"]["site_baseline"]]
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.6))
+    x = np.arange(2)
+    width = 0.34
+    ax.bar(x - width / 2, base, width, label="majority-class baseline", color="#8C8C8C")
+    ax.bar(x + width / 2, acc, width, label="site classifier", color="#4C72B0")
+    for xi, (a, b) in enumerate(zip(acc, base, strict=True)):
+        ax.text(xi + width / 2, a + 0.02, f"{a:.3f}", ha="center", fontweight="bold")
+        ax.text(xi - width / 2, b + 0.02, f"{b:.3f}", ha="center", color="#555555")
+        ax.annotate(
+            f"{a / b:.1f}x baseline", xy=(xi, max(a, b) + 0.10),
+            ha="center", fontsize=9, color="#2C4870",
+        )
+    ax.set_xticks(x)
+    ax.set_xticklabels(datasets, fontsize=9)
+    ax.set_ylabel("Site-classification accuracy")
+    ax.set_ylim(0, 1.15)
+    ax.set_title("Site is recoverable from normalised fundus images in both datasets")
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.95)
+    fig.tight_layout()
+
+    takeaway = (
+        f"A ResNet18 recovers which imaging site a photo came from with "
+        f"{acc[0]:.1%} accuracy on ODIR-5K and {acc[1]:.1%} on EyePACS, against near-identical "
+        f"majority-class baselines ({base[0]:.1%} and {base[1]:.1%}) -- and both are measured "
+        f"AFTER normalising every image to a common 512x512, so the signal is optics/colour "
+        f"rendition, not pixel dimensions. Site is entangled with diagnosis in both "
+        f"(chi2={CROSS_DATASET['odir5k']['chi2']:.1f} and "
+        f"{CROSS_DATASET['eyepacs']['chi2']:.1f}). This is the check that decides whether the "
+        f"project's central claim generalises: EyePACS is a single US screening network, not a "
+        f"multi-centre aggregation like ODIR-5K, so 'site' cannot be an artifact of aggregating "
+        f"centres -- and the signal is STRONGER there, on a test set 5.5x larger. Caveat carried "
+        f"throughout: site is a resolution-derived proxy in both datasets, so it under-counts "
+        f"real sources wherever two cameras share a resolution."
     )
     return _fig_to_base64(fig), takeaway
 
@@ -522,6 +587,7 @@ def build_sections() -> list[tuple[str, str, str]]:
         ("Fellow-eye label concordance", fig_concordance),
         ("4-arm results", fig_arm_results),
         ("A-vs-B: does the gap replicate?", fig_ab_replication),
+        ("Site recoverability replicates on a second dataset", fig_cross_dataset_site),
         ("The three-rung hierarchy: A vs B vs E", fig_split_hierarchy),
         ("Leave-one-site-out: is E's drop one site or a real pattern?", fig_leave_one_site_out),
         ("Training-set overlap falsification test", fig_train_overlap_falsification),

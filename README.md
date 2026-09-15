@@ -4,38 +4,47 @@ Repository: retinal-dataset-audit · Package: retinaprep
 
 **A curation and leakage-audit pipeline for retinal fundus datasets.**
 
-This project's central finding is a hierarchy, not a single number:
+## The argument
 
-- **Splitting by image leaks patients.** 42% of patients cross a naive
-  train/test boundary — a model can partly be tested on patients it has
-  already seen.
-- **Splitting by patient — the standard fix — leaks sites instead.** A
-  classifier recovers which clinic captured an image 84% of the time
-  from the *preprocessed* photo alone, and site is entangled with
-  diagnosis (p≈1e-15). Patient-grouping was never designed to catch
-  this axis, so it doesn't.
-- **Only splitting by site isolates the disease signal**, at a real,
-  measured cost: AUROC drops by over 3x the original patient-level
-  effect when entire sites are actually held out.
+Fundus datasets leak at three levels, and **each level of protection is
+insufficient for the next**:
 
-Each level of grouping is necessary and, on its own, insufficient for
-the level above it. That is a more general and more useful claim than
-"don't split by image," which is where this project started — the
-patient-level leakage work below is the first rung, not the whole
-story.
+| | The leak | ODIR-5K | EyePACS |
+|---|---|---|---|
+| **1** | Image-level splits leak **patients** | 42.0% of patients cross a fold<br>(46.5% of two-eye patients) | **45.9%** |
+| **2** | Patient-level splits leak **sites** | site recoverable **84.0%** vs 29.3% baseline;<br>entangled with diagnosis χ²=115.2 | **93.2%** vs 29.6%;<br>χ²=139.6 |
+| **3** | Neither catches **duplicated patients** | 11 duplicate pairs,<br>8 the same photo under two patient IDs | **444 pairs,<br>441 cross-patient** |
 
-**Externally validated on a second dataset.** The obvious objection to
-the site finding was that ODIR-5K aggregates several Chinese centres
-with mixed camera stock, so a recoverable "site" signal might be an
-artifact of that aggregation. Re-running the whole audit on **EyePACS**
-(35,126 images, 17,563 patients — a US telemedicine screening network,
-different population, equipment and protocol) says otherwise: site is
-recoverable there at **93.2% against a 29.6% baseline**, *stronger* than
-ODIR-5K's 84.0%, on a test set 5.5x larger, and still entangled with
-diagnosis (χ²=139.6, p=2.5e-23). Patient-level leakage (45.9% vs 46.5%
-like-for-like) and bilateral correlation (+25.5 vs +27.3 points over
-chance) replicate almost exactly. The curation *thresholds* do not
-transfer — see [External validation](#external-validation-eyepacs).
+Measured on two datasets from different continents, populations and
+imaging programmes — ODIR-5K (6,392 images, multi-centre Chinese) and
+EyePACS (35,126 images, a US telemedicine screening network). Everything
+below is evidence for this argument.
+
+![Which clinic took the photo is recoverable — in both datasets](docs/figures/cross_dataset_site.png)
+
+The third row is the one to read twice. Patient-grouped splitting — the
+standard fix, and the thing most papers mean by "we split properly" —
+**cannot** catch a photograph filed under two different patient IDs,
+because it only guarantees that one declared ID stays in one fold. In
+EyePACS, 58% of duplicate clusters straddle a patient-grouped split
+anyway.
+
+**Where the argument is weaker than it sounds**, stated up front rather
+than in a footnote:
+
+- The downstream AUROC cost of level-1 leakage is **small and did not
+  replicate cleanly** (+0.0173 then +0.0079 on a re-run; neither
+  survives Bonferroni). The 42%/46% overlap is an exact count; the
+  damage it does to a metric is not settled.
+- "Site" is a **resolution-derived proxy**, not ground-truth camera
+  metadata, in both datasets. It under-counts real sites wherever two
+  cameras share a resolution.
+- Level-2's measured cost (arm E, −0.0557 AUROC) survives
+  prevalence-matching and replicates across 4 of 5 held-out sites, but
+  **every individual site's confidence interval spans zero**, including
+  the original.
+- The duplicate finding shows contamination **exists**; it does not show
+  that any specific published result was affected.
 
 The model here is deliberately boring. The data path is the contribution.
 
@@ -47,7 +56,55 @@ regenerate them from the real dataset.
 
 ---
 
-## Rung 1: image-level splitting leaks patients
+## The most reusable lesson: cross-dataset comparisons measure preprocessing history
+
+This project made the same class of mistake twice, caught it twice, and
+it generalises well beyond fundus imaging. **Any metric sensitive to
+spatial frequency or aspect ratio compares preprocessing pipelines
+unless you force both datasets through an identical path.**
+
+**Instance 1 — a 24x quality gap that was really 2.3x.** EyePACS rejects
+16.9% of images at this project's gradability threshold; ODIR-5K's
+published rate is 0.7%. That reads as "EyePACS is dramatically worse
+quality." But the two numbers describe images that reached 512×512 by
+different routes: ODIR-5K's via whatever the Kaggle release shipped,
+EyePACS's via a LANCZOS downscale from much larger originals. Pushing
+ODIR-5K's *own raw images* through the identical LANCZOS path:
+
+| condition | median gradability | reject rate |
+|---|---|---|
+| ODIR-5K as shipped | 0.879 | 0.7% |
+| ODIR-5K raw → LANCZOS 512 | 0.740 | **7.4%** |
+| EyePACS raw → LANCZOS 512 | 0.613 | 16.9% |
+
+Its reject rate moved **10x with no change whatsoever to the
+photographs**. The honest comparison is 2.3x, not 24x — roughly half the
+apparent gap, on a log scale, was resize history. `variance_of_laplacian`
+already carries a docstring warning about exactly this ("it ranks
+cameras, not sharpness") and resizes internally to defend against it;
+that defence cannot undo a resize that happened before the module was
+called.
+
+**Instance 2 — an aspect-ratio channel that would have faked the headline
+result.** The site classifier must not be able to read source resolution
+directly, or the whole experiment is circular. EyePACS ships native
+images from 433×289 to 5184×3456; the training transform resizes to a
+square 256×256, which squashes a 5184×3456 frame and a 2560×1920 frame
+by *different* aspect-ratio factors. A network could recover "site" from
+that distortion alone, with nothing to do with optics or colour
+rendition. ODIR-5K avoided this for free, because its shipped images were
+already square 512×512 — so the flaw only became visible when a second
+dataset arrived. Fixed by normalising EyePACS to the same square 512×512
+first, which is why `scripts/preprocess_eyepacs.py` exists.
+
+**The general rule**: when comparing any image-quality, sharpness,
+duplicate or domain metric across datasets, re-derive both from raw
+originals through one pipeline you control. If you cannot, the
+comparison is between pipelines, not datasets — and you should say so.
+
+---
+
+## Level 1: image-level splits leak patients
 
 **42.0% of patients (1412/3358) land on both sides of a naive image-level
 split.** That number is exact — it's a count, not a statistic, and needs no
@@ -55,9 +112,8 @@ significance test: under `image_random`, over 4 in 10 of the dataset's
 patients have at least one eye in one fold and their fellow eye in another.
 Grouped splitting (`patient_group`) eliminates this outright — 0 patients
 cross a fold boundary, by construction, every time. This is the leakage the
-rest of this section measures the downstream cost of — but it is rung one
-of three; see "Cross-camera domain-shift audit" below for rungs two and
-three.
+rest of this section measures the downstream cost of — but it is level
+one of three; see "Level 2" and "Level 3" below.
 
 ![42% of patients appear on both sides of a naive split](docs/figures/patient_overlap.png)
 
@@ -271,60 +327,9 @@ the overlap actually hands the model. Full investigation, including two
 other candidate explanations tested and a training-curve analysis, is in
 `docs/notes.md`.
 
-### Dataset integrity findings
-
-Two things came out of investigating the effect size that are worth
-stating on their own, independent of the A/B result:
-
-**Eight genuine cross-patient duplicates exist in the raw data**, confirmed
-by pixel difference near zero despite different file encoding — the same
-photograph, filed under two different patient IDs, in every case: patients
-352↔973, 398↔668, and 2487↔3185 (each duplicated on *both* eyes), plus
-321↔1043, 3297↔4542, 31↔105, 1109↔1166, and 4330↔4552 (one eye each).
-This is exactly why this pipeline needs both a grouped split *and* a
-deduplication stage, not just one: **patient-grouped splitting cannot
-catch this.** It only protects against a single declared patient ID
-crossing a fold boundary — it has no way to know that two *different*
-declared IDs are actually the same underlying capture. Only content-based
-deduplication closes that gap. The money metric: of the 11 unique
-verified duplicate pairs (8 by phash, 10 by embeddings, 7 found by
-both), 3 straddle the `image_random` split's folds and 2 straddle
-`patient_group`'s — materially the same order of magnitude for both,
-confirming patient-grouping has no mechanism to catch this leak at all.
-
-*(This count moved from an earlier estimate of 2 to 8 during the project's
-own work, and the reason why is itself informative, not just a
-correction: an initial ad hoc check only pixel-verified phash's tightest
-sub-bucket — hamming distance exactly 0 — and found 2. The real dedupe
-module verifies *every* phash candidate at the configured hamming≤6
-threshold (13,733 of them) plus every embedding candidate, and found 8:
-two real duplicates were sitting at phash hamming distance 1–6, invisible
-to a hamming==0-only check, and three more were found only by the
-embedding method, whose whole purpose is catching same-content pairs that
-don't hash near-identically in the first place (different lighting/
-exposure). Neither method alone would have found all 8 — see
-`docs/notes.md` and `WALKTHROUGH.md` §7 for why both are necessary on this
-modality, not just complementary in theory.)*
-
-**Perceptual hashing (phash) is unreliable on fundus photography without
-a tight, verified threshold.** At the naive default (`hamming<=6`), phash
-flags 13,733 near-duplicate pairs across 6392 images — visually inspected,
-and the overwhelming majority are false positives. Fundus photos share
-enough generic macro-structure (dark background, circular field of view,
-similar framing) that a coarse perceptual hash collapses unrelated images
-together; this is a property of the imaging modality, not a bug in this
-implementation. Even at the strictest possible bucket (`hamming==0`,
-bit-identical hash), the overwhelming majority (12 of 14) of flagged pairs
-were still false positives under direct pixel-difference verification — a
-hash match alone is not sufficient evidence of duplication in this domain,
-at any threshold, without a secondary check. Anyone building a dedupe step for
-fundus (or likely other structurally-homogeneous medical imaging) data
-should expect this and budget for verification, not just threshold
-tuning.
-
 ---
 
-## Rungs 2 and 3: cross-camera domain-shift audit, and site-level splitting
+## Level 2: patient-level splits leak sites
 
 ODIR-5K mixes Canon, Zeiss and Kowa across several Chinese centres, with
 no explicit camera/site column. Raw image resolution (before this
@@ -338,7 +343,7 @@ groups, consolidated (groups under 50 images) into **20 final site
 classes**. 99.0% of two-eye patients share an identical raw resolution
 across both eyes — this proxy is overwhelmingly a per-patient property.
 
-### Rung 2: patient-level splitting leaks sites instead
+### The audit: is site recoverable at all?
 
 **The test that matters**: a ResNet18 trained on the *already-resized*
 512x512 images (not the raw ones) to predict site, patient-grouped
@@ -358,7 +363,7 @@ hypertensive retinopathy, glaucoma, cataract, myopia, and "other" are
 all highly significant (p<0.005); only age-related macular degeneration
 is not (p=0.12).
 
-### Rung 3: site-level splitting, arm E — the direct experiment
+### What it costs: arm E, the direct experiment
 
 Diagnosis alone leaves a question open: how much does the site shortcut
 actually cost a trained model? **Arm E** holds out entire sites
@@ -470,14 +475,145 @@ untestable at n=5). site_4 stays an unexplained exception.
 
 ---
 
+## Level 3: neither split catches duplicated patients
+
+Both levels above protect against a *declared* patient ID crossing a fold
+boundary. Neither has any mechanism to notice that two **different**
+declared IDs are the same underlying photograph. Only content-based
+deduplication closes that gap — and in EyePACS the gap is large.
+
+### EyePACS: 441 photographs filed under two different patient IDs
+
+Measured on a patient-grouped subsample matched to ODIR-5K's exact size
+(6,392 images, 3,196 whole patients), so scale is held constant:
+
+| (both n=6,392) | ODIR-5K | EyePACS |
+|---|---|---|
+| Verified duplicate pairs | 11 | **444** |
+| Of those, same image under two *different* patient IDs | 8 | **441** |
+| Duplicate clusters | 11 | **118** |
+| Clusters straddling `image_random` | 3 (27%) | 75 (64%) |
+| **Clusters straddling `patient_group`** | 2 (18%) | **68 (58%)** |
+
+**How they were found.** Perceptual hash (`hamming≤6`) to generate
+candidates, then every candidate verified by mean absolute pixel
+difference (threshold 5.0 on a 0–255 scale), plus an independent
+pretrained-ResNet18 embedding pass at cosine ≥0.99. phash alone is not
+sufficient evidence on this modality — see the false-positive analysis
+below — so nothing counts as a duplicate without pixel-level
+verification.
+
+**How the obvious confound was excluded.** EyePACS contains many
+near-black failed captures (16.9% fall below the gradability threshold,
+some scoring 0.00), and *two blank frames would pass both the phash and
+the pixel-difference test while being unrelated photographs*. Checked
+directly: flagged duplicates are somewhat enriched for dark, low-quality
+images (median intensity 50.6 vs 73.3 overall; 23.7% below the reject
+threshold vs 16.9%) — an enrichment, not an explanation. The median
+flagged duplicate scores 0.569 and the minimum is 0.271, not 0.00.
+Settled by looking: a sampled contact sheet
+(`artifacts/eyepacs_dedupe6392/dup_pairs_sample.png`) shows unmistakably
+identical photographs — matching vessel trees, optic disc positions,
+lesion positions, even matching notch artifacts at the frame edge —
+several differing only in white balance, i.e. the same capture
+re-processed or re-uploaded.
+
+**What this means for anyone training on EyePACS.** EyePACS underpins a
+large amount of published diabetic-retinopathy work and several cleared
+products. A model trained on it with a patient-grouped split will, on
+these numbers, still have roughly **58% of duplicate clusters spanning
+train and test** — the same photograph scored as both a training example
+and a held-out one, with the split doing exactly what it was designed to
+do. The practical implication is that patient-level splitting is not
+sufficient hygiene for this dataset, and a content-based dedupe pass
+should be part of the pipeline.
+
+**What this does *not* show, stated explicitly.** This is a measurement
+of dataset contamination, not an audit of anybody's results. It does not
+demonstrate that any specific published model, benchmark number or
+regulatory submission was affected — that would require knowing each
+study's split and re-running it, which this project has not done. The
+numbers above come from a 6,392-image subsample, not the full 35,126-image
+train split, so the dataset-wide count is unmeasured (and the subsample
+was drawn to match ODIR-5K's size, not to estimate a total). Visual
+confirmation covered a sample of clusters, not all 118. Finally, "the
+same photograph under two patient IDs" is what the pixel evidence shows;
+whether that reflects genuine re-enrolment, an export artifact, or
+deliberate anonymisation of repeat visits is not something this data can
+distinguish.
+
+### ODIR-5K: the same problem, two orders of magnitude smaller
+
+**Eight genuine cross-patient duplicates exist in the raw data**, confirmed
+by pixel difference near zero despite different file encoding — the same
+photograph, filed under two different patient IDs, in every case: patients
+352↔973, 398↔668, and 2487↔3185 (each duplicated on *both* eyes), plus
+321↔1043, 3297↔4542, 31↔105, 1109↔1166, and 4330↔4552 (one eye each).
+This is exactly why this pipeline needs both a grouped split *and* a
+deduplication stage, not just one: **patient-grouped splitting cannot
+catch this.** It only protects against a single declared patient ID
+crossing a fold boundary — it has no way to know that two *different*
+declared IDs are actually the same underlying capture. Only content-based
+deduplication closes that gap. The money metric: of the 11 unique
+verified duplicate pairs (8 by phash, 10 by embeddings, 7 found by
+both), 3 straddle the `image_random` split's folds and 2 straddle
+`patient_group`'s — materially the same order of magnitude for both,
+confirming patient-grouping has no mechanism to catch this leak at all.
+
+*(This count moved from an earlier estimate of 2 to 8 during the project's
+own work, and the reason why is itself informative, not just a
+correction: an initial ad hoc check only pixel-verified phash's tightest
+sub-bucket — hamming distance exactly 0 — and found 2. The real dedupe
+module verifies *every* phash candidate at the configured hamming≤6
+threshold (13,733 of them) plus every embedding candidate, and found 8:
+two real duplicates were sitting at phash hamming distance 1–6, invisible
+to a hamming==0-only check, and three more were found only by the
+embedding method, whose whole purpose is catching same-content pairs that
+don't hash near-identically in the first place (different lighting/
+exposure). Neither method alone would have found all 8 — see
+`docs/notes.md` and `WALKTHROUGH.md` §7 for why both are necessary on this
+modality, not just complementary in theory.)*
+
+### phash alone is not evidence on this modality
+
+**Perceptual hashing (phash) is unreliable on fundus photography without
+a tight, verified threshold.** At the naive default (`hamming<=6`), phash
+flags 13,733 near-duplicate pairs across 6392 images — visually inspected,
+and the overwhelming majority are false positives. Fundus photos share
+enough generic macro-structure (dark background, circular field of view,
+similar framing) that a coarse perceptual hash collapses unrelated images
+together; this is a property of the imaging modality, not a bug in this
+implementation. Even at the strictest possible bucket (`hamming==0`,
+bit-identical hash), the overwhelming majority (12 of 14) of flagged pairs
+were still false positives under direct pixel-difference verification — a
+hash match alone is not sufficient evidence of duplication in this domain,
+at any threshold, without a secondary check. Anyone building a dedupe step for
+fundus (or likely other structurally-homogeneous medical imaging) data
+should expect this and budget for verification, not just threshold
+tuning.
+
+### A scaling limit, reported rather than papered over
+
+`phash_duplicates` builds a full n×n distance matrix via `squareform`:
+0.46GB peak at ODIR-5K's n=6,392, but **13.79GB at EyePACS's n=35,126**,
+against 7.8GB of RAM. An O(n²) memory problem that is invisible at the
+scale it was written against. Deliberately *not* rewritten: candidate
+counts scale with n² as well (31,084 candidates at n=6,392 implies
+~930,000 at n=35,126, each needing two image loads to verify), so fixing
+the memory would only expose a worse wall in the verification stage.
+This is why the EyePACS duplicate numbers above are measured at matched
+size rather than dataset-wide.
+
+---
+
 ## External validation: EyePACS
 
-Everything above is measured on ODIR-5K. The natural objection to the
-site finding is that ODIR-5K *aggregates multiple Chinese centres with
-mixed camera stock*, so "site" could be an artifact of that aggregation
-rather than a property of fundus imaging. The test: re-run the whole
-audit on a second dataset with a different population, different
-equipment and a different collection protocol.
+The levels above are argued from two datasets throughout; this section
+is the head-to-head detail behind that, and the account of what the
+second dataset cost to add. The objection it was built to answer: ODIR-5K
+*aggregates multiple Chinese centres with mixed camera stock*, so "site"
+could be an artifact of that aggregation rather than a property of fundus
+imaging.
 
 **EyePACS** (Kaggle `diabetic-retinopathy-detection`, train split):
 35,126 images, 17,563 patients, one US telemedicine screening network.
@@ -514,57 +650,27 @@ isn't there:
 ### What does not transfer
 
 **The quality threshold is calibrated to a preprocessing pipeline, not
-just a dataset.** Naively EyePACS rejects 16.9% of images against
-ODIR-5K's published 0.7% — a 24x gap. But those numbers describe images
-that reached 512×512 by different routes. Pushing ODIR-5K's *own raw
-images* through the identical LANCZOS path moves its reject rate to
-7.4%, with no change to the photographs:
-
-| condition | median score | reject rate |
-|---|---|---|
-| ODIR-5K as shipped | 0.879 | 0.7% |
-| ODIR-5K raw → LANCZOS 512 | 0.740 | 7.4% |
-| EyePACS raw → LANCZOS 512 | 0.613 | 16.9% |
-
-Fair comparison: **2.3x, not 24x.** The gradability *metric* transfers
-fine (its extremes are correct on EyePACS); the absolute 0.5 cutoff does
-not.
+just a dataset** — 16.9% vs 7.4% fairly compared, against an apparent
+24x. Full numbers and the control that established it are in
+[the preprocessing-history section](#the-most-reusable-lesson-cross-dataset-comparisons-measure-preprocessing-history)
+above, since the lesson generalises past this pair of datasets. The
+gradability *metric* transfers fine (its extremes are correct on
+EyePACS, separating quality from pathology); the absolute 0.5 cutoff
+does not.
 
 **An ODIR-5K-only design decision turned out to be load-bearing.** 99.6%
 of EyePACS images trip `fov_clipped` (vs 6.9% of ODIR-5K's) — they're
 truncated ovals. `quality.py` deliberately doesn't gate rejection on that
-flag, a call made on ODIR-5K evidence alone. Had it gated, essentially
+flag, a call made on ODIR-5K evidence alone after circularity was found
+to conflate oval crops with real truncation. Had it gated, essentially
 the entire EyePACS dataset would have been rejected.
 
-**The dedupe implementation doesn't scale.** `phash_duplicates` builds a
-full n×n matrix: 0.46GB at n=6,392, but **13.79GB at n=35,126** — an
-O(n²) memory problem invisible at the scale it was written against.
+**The dedupe implementation doesn't scale** (O(n²) memory) — see
+[Level 3](#level-3-neither-split-catches-duplicated-patients).
 
-### Duplicates: the largest divergence
-
-Run on a patient-grouped subsample matched to ODIR-5K's exact size, so
-scale is held constant:
-
-| (both n=6,392) | ODIR-5K | EyePACS |
-|---|---|---|
-| Verified duplicate pairs | 11 | **444** |
-| Duplicate clusters | 11 | **118** |
-| Same image under two different patient IDs | 8 | **441** |
-| Clusters straddling `patient_group` | 2 (18%) | **68 (58%)** |
-
-Checked against the obvious confound (EyePACS has many near-black failed
-captures, and two blank frames would fool both phash and pixel
-difference) — duplicates are somewhat enriched for dark images, but not
-explained by them, and a sampled contact sheet shows unmistakably
-identical photographs: matching vessel trees, optic discs and frame-edge
-notches, several differing only in white balance.
-
-**58% of duplicate clusters straddle a patient-grouped split, and
-patient-grouping cannot prevent it** — the two copies are declared to be
-*different patients*, so grouping on `patient_id` is structurally
-incapable of keeping them together. This project already argued dedupe
-closes a gap splitting cannot; EyePACS shows it at 34x the cluster count
-in a real-world screening archive.
+**Duplicate contamination is two orders of magnitude worse** — 444 pairs
+vs 11, promoted to [Level 3](#level-3-neither-split-catches-duplicated-patients)
+as a finding in its own right rather than a row in a comparison table.
 
 ### Did the adapter abstraction hold?
 
@@ -782,7 +888,7 @@ Deliberately not built yet. Listed so the scope is honest rather than padded.
 - [ ] DICOM PHI stripping and burned-in patient-text detection on the image itself
 - [x] Cross-camera domain shift audit via a site classifier — done, see below
 - [x] EyePACS adapter + full external validation of the audit on a second dataset — done, see "External validation: EyePACS" above
-- [x] Site-level splitting (arm E), motivated directly by the audit above — done, see "Rungs 2 and 3" above
+- [x] Site-level splitting (arm E), motivated directly by the audit above — done, see "Level 2" above
 
 ---
 

@@ -1,4 +1,4 @@
-"""Six PNGs for README.md, exported to docs/figures/.
+"""Seven PNGs for README.md, exported to docs/figures/.
 
 Designed for a README, not a notebook: readable at ~800px wide, large
 fonts, minimal chartjunk, and a title that states the finding rather
@@ -9,7 +9,8 @@ figures as the HTML reports.
 
 Run: python notebooks/readme_figures.py
 Output: docs/figures/{patient_overlap,concordance,ab_replication,
-        split_hierarchy,leave_one_site_out,quality_examples}.png
+        cross_dataset_site,split_hierarchy,leave_one_site_out,
+        quality_examples}.png
 """
 
 from __future__ import annotations
@@ -192,6 +193,40 @@ def ab_replication() -> None:
     plt.close(fig)
 
 
+def cross_dataset_site() -> None:
+    """Site-classifier accuracy vs its own majority baseline, on both
+    datasets. The most persuasive single chart in the project now: it is
+    the check that decides whether the central claim generalises."""
+    findings = _load_findings_module()
+    cd = findings.CROSS_DATASET
+    labels = ["ODIR-5K\n(China, multi-centre)", "EyePACS\n(US, screening network)"]
+    acc = [cd["odir5k"]["site_acc"], cd["eyepacs"]["site_acc"]]
+    base = [cd["odir5k"]["site_baseline"], cd["eyepacs"]["site_baseline"]]
+
+    fig, ax = plt.subplots(figsize=(9, 5.2))
+    x = np.arange(2)
+    width = 0.32
+    ax.bar(x - width / 2, base, width, label="chance (majority class)", color=GREY)
+    ax.bar(x + width / 2, acc, width, label="site classifier", color=BLUE)
+    for xi, (a, b) in enumerate(zip(acc, base, strict=True)):
+        ax.text(xi + width / 2, a + 0.025, f"{a:.0%}", ha="center", fontsize=21,
+                fontweight="bold")
+        ax.text(xi - width / 2, b + 0.025, f"{b:.0%}", ha="center", fontsize=17, color="#666666")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("Site identified correctly")
+    ax.set_ylim(0, 1.12)
+    ax.set_yticks([0, 0.5, 1.0])
+    ax.legend(loc="upper left", frameon=False, fontsize=13)
+    fig.suptitle(
+        "Which clinic took the photo is recoverable — in both datasets",
+        fontsize=19, y=1.02,
+    )
+    fig.tight_layout()
+    fig.savefig(FIGURES_DIR / "cross_dataset_site.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def split_hierarchy() -> None:
     """Three-rung hierarchy in one AUROC chart: A (image_random) vs B
     (patient_group) vs E (site_group). Reuses findings_charts.py's data
@@ -294,6 +329,7 @@ FIGURE_NAMES = (
     "patient_overlap",
     "concordance",
     "ab_replication",
+    "cross_dataset_site",
     "split_hierarchy",
     "leave_one_site_out",
     "quality_examples",
@@ -305,6 +341,7 @@ def main() -> None:
     patient_overlap()
     concordance()
     ab_replication()
+    cross_dataset_site()
     split_hierarchy()
     leave_one_site_out()
     quality_examples()
