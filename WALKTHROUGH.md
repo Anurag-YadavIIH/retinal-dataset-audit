@@ -1184,6 +1184,105 @@ ships.
 
 ---
 
+## 13. A provenance finding: the multi-grader data these datasets are famous for
+
+Before any segmentation code was written, Step 0 for item 4 checked what
+is actually obtainable. Two of the most-cited segmentation datasets in
+retinal imaging turn out not to ship, through their primary channels, the
+multi-grader annotations their reputations rest on. This is a finding
+about data provenance rather than about models, and it determines whether
+an inter-grader ceiling can be computed at all.
+
+### DRIVE's second observer: present in the literature, absent from the official distribution
+
+DRIVE's test set is documented as carrying manual vessel delineations
+from **two** independent human observers, and the second-observer
+agreement is quoted throughout the vessel-segmentation literature as the
+human performance ceiling. What the official channel actually
+distributes is different. The DRIVE Grand Challenge download page states
+plainly:
+
+> "For the test cases no annotations are made available, you will be able
+> to submit your predictions to this site and have them compared to the
+> gold standard."
+
+The test annotations — first and second observer both — are retained
+server-side for scoring. Registration gets you the images, not the
+labels.
+
+**What was checked, and what each source contains.** 22 DRIVE-candidate
+datasets on Kaggle were enumerated by API (file listings only, nothing
+downloaded), plus a local copy already on disk:
+
+| Source | `test/1st_manual` | `test/2nd_manual` |
+|---|---|---|
+| Official Grand Challenge distribution | withheld (server-side scoring) | withheld |
+| `andrewmvd/...` — top result, 18.8k downloads, 0.875 usability | absent | absent |
+| `srinjoybhuiya/...`, `namnguynnnn/...`, `zhz638/...`, `vasavigneswar/...` | absent | absent |
+| `tushartalukder/...`, `yattseung/...`, `anacondaece/...`, `vutu123456/...` | absent | absent |
+| `ipythonx/...` (470MB multi-dataset collection) | absent | absent |
+| `pradosh123/...` "Test/Masks" | **not DRIVE** — files are HRF (`13_dr_HRF.tif`) | — |
+| local copy (`test.zip` / `training.zip`) | absent | absent |
+| **`ahtcmstp/retina`** | **present (20)** | **present (20)** |
+| **`xxc025/111111`** | **present (20)** | **present (20)** |
+| `zionfuo/drive2004`, `a1742976730/...` (inside `Retina-Unet-master/`) | — | present (20) |
+
+**The claim, stated precisely.** The second-observer set is *not*
+unobtainable — it exists and circulates. It is absent from the official
+distribution and from every curated, highly-downloaded mirror checked,
+and survives in a handful of obscure re-uploads, several of which are
+clearly copies of the pre-Grand-Challenge distribution (one is named
+`drive2004`; another is bundled inside a checkout of an old
+`Retina-Unet` repository). This says what the sources checked contain.
+It does not establish that no other public distribution has it, and it
+makes no claim about what is available under institutional agreement.
+
+**Why this matters for reproducibility.** Anyone following the
+authoritative route — register at the official site, download DRIVE —
+cannot compute the second-observer agreement that their own field quotes
+as the ceiling. Anyone who happens to pull an old third-party re-upload
+can. The number is reproducible only by accident of which copy you
+obtained, and the copies are not distinguished by name, size, or
+description. The most-downloaded, highest-usability-rated mirror is
+among those missing it, so ordinary care in choosing a source selects
+*against* the complete version.
+
+An earlier draft of this section claimed the second-observer data was
+simply unavailable, on the strength of five sources. Widening to 22
+refuted that within minutes. Recorded here because the wrong version was
+one edit away from being published, and the only thing that prevented it
+was checking more sources before asserting a negative.
+
+### REFUGE: seven graders, one released reference
+
+The same shape of gap, for the same reason, in the other dataset item 4
+considered. REFUGE's optic disc and cup annotations were produced by
+**seven independent glaucoma specialists**, then merged by a senior
+specialist into a single reference standard. The merged reference is what
+ships; the seven individual annotations are not released.
+
+So REFUGE — 1,200 images, the largest and most rigorously annotated of
+the candidates — cannot supply an inter-grader number either, despite
+having *more* grader redundancy behind it than any other dataset here.
+The variance was measured and then averaged away before distribution.
+
+### The consequence
+
+Two of the most-cited retinal segmentation datasets, and neither ships
+usable multi-grader data through its primary channel: DRIVE withholds it,
+REFUGE merges it. **CHASE_DB1 carries this project's inter-grader work
+by default rather than by preference** — 28 images, two observers
+(`1stHO`/`2ndHO`), 56 masks, verified present by file listing.
+
+There is a general lesson worth stating for anyone planning work that
+depends on annotation variance: **confirm the multi-grader data is in the
+distribution you can actually obtain, before designing around it.** A
+dataset's reputation reflects what was collected, which is not the same
+as what is published. Checking costs an API call; discovering it after
+building costs the experiment.
+
+---
+
 ## Interview questions
 
 1. **Why does patient-level splitting matter more here than in, say, chest

@@ -942,9 +942,19 @@ pytest
 
 Deliberately not built yet. Listed so the scope is honest rather than padded.
 
-- [ ] U-Net optic disc and cup segmentation baseline (REFUGE, IDRiD)
+- [ ] U-Net optic disc segmentation baseline (IDRiD, 81 images) — in progress
 - [ ] Mask and annotation QC: alignment, empty masks, area outliers, connected components
-- [ ] Inter-grader agreement (Dice, IoU) using DRIVE's second-observer set
+- [ ] Inter-grader agreement (Dice, IoU) — **on CHASE_DB1's two observers**, not
+      DRIVE's: DRIVE's official distribution withholds its test annotations and
+      every curated mirror checked lacks them (WALKTHROUGH.md §13)
+- [ ] **REFUGE held-out-device experiment — the direct segmentation parallel to
+      arm E.** REFUGE splits by *device* on purpose: training is 400 Zeiss
+      Visucam 500 images at 2124×2056, validation and test are 800 Canon CR-2
+      at 1634×1634. That is a built-in, documented domain shift of exactly the
+      kind arm E constructed by hand for classification — train on one device,
+      evaluate on another, and measure the drop. Deferred only because it needs
+      grand-challenge.org registration; the dataset choice and the experiment
+      design are settled.
 - [ ] DICOM PHI stripping and burned-in patient-text detection on the image itself
 - [x] Cross-camera domain shift audit via a site classifier — done, see below
 - [x] EyePACS adapter + full external validation of the audit on a second dataset — done, see "External validation: EyePACS" above

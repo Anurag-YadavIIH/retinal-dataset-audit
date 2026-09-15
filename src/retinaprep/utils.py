@@ -142,21 +142,49 @@ MANIFEST_COLUMNS = [
 
 REQUIRED_NON_NULL = ["image_path", "patient_id", "eye", "label", "dataset_name"]
 
+# Segmentation datasets satisfy a different subset of the same schema, and
+# pretending otherwise would mean inventing values. IDRiD's segmentation
+# release ships no laterality and no DR grade (its grading set is a
+# separate download), and CHASE_DB1 has no disease label at all -- so `eye`
+# and `label` are genuinely unknown there, not merely unpopulated. What a
+# segmentation row must have instead is a mask.
+#
+# The columns themselves stay identical either way: MANIFEST_COLUMNS is
+# unchanged, so every adapter still emits all seven and nothing downstream
+# sees a different shape. Only which of them may be null varies by task.
+SEGMENTATION_REQUIRED_NON_NULL = ["image_path", "patient_id", "mask_path", "dataset_name"]
 
-def validate_manifest(df: pd.DataFrame) -> None:
+# Additive, and deliberately not in MANIFEST_COLUMNS: classification
+# adapters neither emit it nor are affected by it.
+OPTIONAL_COLUMNS = ["mask_path"]
+
+
+def validate_manifest(df: pd.DataFrame, task: str = "classification") -> None:
     """Assert the canonical manifest contract.
 
     Collects every violation before raising, rather than failing on the
     first one, so a caller fixing an adapter sees the whole picture in one
     run instead of playing whack-a-mole.
+
+    `task` selects which columns must be non-null; it does not change the
+    required column set. Defaults to "classification" so every existing
+    caller keeps exactly the guarantees it had.
     """
+    if task not in ("classification", "segmentation"):
+        raise ValueError(f"Unknown task {task!r}, expected 'classification' or 'segmentation'")
+
     missing_cols = [c for c in MANIFEST_COLUMNS if c not in df.columns]
+    if task == "segmentation" and "mask_path" not in df.columns:
+        missing_cols.append("mask_path")
     if missing_cols:
         raise ValueError(f"Manifest is missing required columns: {missing_cols}")
 
     errors: list[str] = []
+    required_non_null = (
+        REQUIRED_NON_NULL if task == "classification" else SEGMENTATION_REQUIRED_NON_NULL
+    )
 
-    for col in REQUIRED_NON_NULL:
+    for col in required_non_null:
         bad_rows = df.index[df[col].isna()].tolist()
         if bad_rows:
             errors.append(f"column {col!r} is null at rows {bad_rows}")
@@ -193,6 +221,20 @@ def validate_manifest(df: pd.DataFrame) -> None:
             f"column 'image_path' points to a nonexistent file at rows {bad_rows}: "
             f"{df.loc[missing_files_mask, 'image_path'].tolist()}"
         )
+
+    if "mask_path" in df.columns:
+        non_null_masks = df["mask_path"].notna()
+        mask_exists = pd.Series(False, index=df.index)
+        mask_exists[non_null_masks] = df.loc[non_null_masks, "mask_path"].apply(
+            lambda p: Path(p).exists()
+        )
+        missing_masks = non_null_masks & ~mask_exists
+        if missing_masks.any():
+            bad_rows = df.index[missing_masks].tolist()
+            errors.append(
+                f"column 'mask_path' points to a nonexistent file at rows {bad_rows}: "
+                f"{df.loc[missing_masks, 'mask_path'].tolist()}"
+            )
 
     if errors:
         raise ValueError("Manifest failed validation:\n" + "\n".join(f"  - {e}" for e in errors))
