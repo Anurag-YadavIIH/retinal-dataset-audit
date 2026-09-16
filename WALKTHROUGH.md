@@ -1416,6 +1416,57 @@ documents — are the very thing the official distribution withholds. The
 data needed to check the question is the data that is hardest to obtain,
 which may be part of why the question is not routinely asked.
 
+### The test was run, and it came out the other way
+
+That paragraph was written before running it. It was then run on a U-Net
+trained on DRIVE's 20 training images and scored on DRIVE's 20 test
+images — the same images the ceiling was measured on, so the comparison
+is commensurable:
+
+| | Dice | 95% CI |
+|---|---|---|
+| model vs **observer 1** (its training target) | 0.7884 ± 0.0229 | [0.7784, 0.7985] |
+| model vs **observer 2** (regraded, never trained on) | **0.8074** ± 0.0258 | [0.7961, 0.8187] |
+| observer 1 vs observer 2 (the ceiling) | 0.7882 ± 0.0208 | [0.7791, 0.7973] |
+
+**The predicted style-fitting signature did not appear, and the sign is
+reversed.** The model agrees *more* with the observer it never saw
+(0.8074) than with the one it was trained on (0.7884). The style gap is
+−0.0190, not the positive value the hypothesis called for.
+
+Two readings, and the second looks likelier:
+
+- **The model reached inter-observer agreement and stopped.** Its
+  agreement with observer 1 (0.7884) is statistically indistinguishable
+  from observer 2's agreement with observer 1 (0.7882). On this
+  evidence, the model is exactly as close to the reference standard as
+  another qualified human is — no closer, and no further.
+- **It converged on something more central than either annotator.**
+  Foreground area is the clue: observer 1 marks 8.76% of the frame,
+  observer 2 marks 8.44%, and the model marks 8.53% — between them, and
+  within 1% of observer 2 despite never seeing observer 2's masks. A
+  model fitted with a Dice+BCE objective tends toward confident,
+  slightly conservative regions, and that pulled it away from observer
+  1's more liberal marking rather than toward it.
+
+**What this does and does not establish.** It establishes that the test
+is cheap, that it runs, and that for *this* model observer-1
+style-fitting is not the explanation for anything. It does not answer
+the question for the published 0.80–0.82 results, because this model is
+not one of them: a plain full-image U-Net at 512×512 reaching 0.7884 is
+below that band, and a model pushed to 0.82 may well have started fitting
+idiosyncrasies that one at 0.79 has not. The honest summary is that the
+first model to be put through this check showed no style-fitting, which
+is a point in favour of the benign reading and an argument for running
+the check more often, not a resolution.
+
+One incidental finding worth recording: the model beat the ceiling on
+13 of 20 images. That looks striking and means very little — its mean
+agreement with observer 1 and observer 2's mean agreement with observer
+1 differ by 0.0002, so which of the two is higher on any given image is
+close to a coin flip. It is a good example of a per-image win-rate
+sounding like evidence when the underlying means are identical.
+
 ---
 
 ## Interview questions
