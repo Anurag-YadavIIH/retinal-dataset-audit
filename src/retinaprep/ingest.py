@@ -22,7 +22,10 @@ def run_ingest(cfg: dict) -> None:
 
     adapter = get_adapter(cfg["dataset"]["name"])
     manifest = adapter(cfg)
-    validate_manifest(manifest)
+    # Segmentation adapters satisfy a different non-null subset of the same
+    # schema (utils.SEGMENTATION_REQUIRED_NON_NULL); defaults to
+    # classification so every existing config behaves identically.
+    validate_manifest(manifest, task=cfg["dataset"].get("task", "classification"))
 
     manifest, corrupt = _drop_unopenable_images(manifest)
 
@@ -42,16 +45,27 @@ def run_ingest(cfg: dict) -> None:
 
 
 def _drop_unopenable_images(manifest: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
-    """Force a full decode of every image; bad files are logged, not silently dropped."""
+    """Force a full decode of every image; bad files are logged, not silently dropped.
+
+    Masks are decoded too when present: an unreadable mask makes the row
+    useless for segmentation just as surely as an unreadable image, and
+    finding out at ingest is cheaper than mid-training.
+    """
     corrupt: list[dict] = []
     keep: list[bool] = []
-    for image_path in manifest["image_path"]:
+    has_masks = "mask_path" in manifest.columns
+    for row in manifest.itertuples(index=False):
+        image_path = row.image_path
+        paths = [image_path]
+        if has_masks and isinstance(getattr(row, "mask_path", None), str):
+            paths.append(row.mask_path)
         try:
-            with Image.open(image_path) as im:
-                im.load()
+            for p in paths:
+                with Image.open(p) as im:
+                    im.load()
             keep.append(True)
         except (OSError, UnidentifiedImageError) as exc:
-            logger.warning("Corrupt or unreadable image %s: %s", image_path, exc)
+            logger.warning("Corrupt or unreadable file for %s: %s", image_path, exc)
             corrupt.append({"image_path": image_path, "reason": str(exc)})
             keep.append(False)
     clean = manifest.loc[keep].reset_index(drop=True)
