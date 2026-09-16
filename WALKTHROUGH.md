@@ -1283,6 +1283,141 @@ building costs the experiment.
 
 ---
 
+## 14. The first thing that transferred
+
+Every cross-dataset comparison in this project so far has come apart on
+contact. Then one did not, and the contrast is the point.
+
+### What did not transfer
+
+| Quantity | ODIR-5K | EyePACS | |
+|---|---|---|---|
+| Quality reject rate at the 0.5 cutoff | 0.7% (as shipped) | 16.9% | threshold is calibrated to a *preprocessing pipeline*, not a dataset — re-deriving ODIR-5K through the same resize moved it to 7.4% |
+| Duplicate pairs per 1,000 images | 1.7 | 69.5 | ~40x, at matched sample size |
+| Dedupe pixel-difference threshold | separates cleanly (genuine pairs at 0.0037, false positives at 15+) | no separation at all — nothing below 2.0, smooth continuum through the cutoff | |
+| Site recoverability | 84.0% | 93.2% | transferred in *direction*, not in value |
+
+The pattern was consistent enough to become an expectation: numbers tuned
+on one dataset describe that dataset, and porting them produces
+confident nonsense. Two of this project's corrections came from exactly
+that.
+
+### What did transfer
+
+Inter-grader agreement on vessel annotation:
+
+| | n | Dice | 95% CI |
+|---|---|---|---|
+| CHASE_DB1 | 28 | **0.7765** ± 0.0250 | [0.7673, 0.7858] |
+| DRIVE | 20 | **0.7879** ± 0.0206 | [0.7789, 0.7969] |
+
+**0.0114 apart, with overlapping confidence intervals.** These are
+different annotators, in different countries, working from different
+cameras at different resolutions (999×960 versus 565×584), under
+annotation efforts separated by roughly a decade and with no shared
+protocol. CHASE_DB1's images are of schoolchildren in England;
+DRIVE's are from a Dutch diabetic-retinopathy screening programme.
+
+Two independent groups of humans, given the same kind of task, disagree
+with each other by the same amount.
+
+### Why that is interesting rather than a curiosity
+
+The quantities that failed to transfer were all **properties of a
+dataset or a pipeline**: how a collection was preprocessed, how often it
+contains duplicates, how its cameras vary. It makes sense that those
+differ, and in hindsight expecting otherwise was the error.
+
+Inter-observer agreement is not that. It is a property of **the task** —
+of how much genuine ambiguity there is in deciding where a vessel ends
+and the background begins, at the resolution fundus photography offers.
+That ambiguity lives in the anatomy and the imaging, not in the
+institution, so a stable value across two unrelated annotation efforts
+is the outcome the hypothesis predicts.
+
+Stated carefully, because two datasets is two datasets: **this is
+consistent with ~0.78 Dice being a property of vessel annotation itself
+rather than of either annotation effort.** It is not established by n=2.
+A third two-observer vessel dataset landing near 0.78 would make the case
+considerably stronger, and one landing at 0.85 would refute it outright.
+The prediction is falsifiable, which is the main thing to like about it.
+
+### The practical consequence
+
+If ~0.78 is the task's ceiling rather than a quirk of one dataset, then
+it is the number any vessel-segmentation result should be read against,
+regardless of which dataset produced it. A model reported at 0.80 Dice
+is not 20 points from perfect. It is at or slightly past the point where
+two human experts stop agreeing with each other — which raises a
+question worth taking seriously, addressed in §15.
+
+---
+
+## 15. What does a Dice above inter-observer agreement mean?
+
+A recurring figure in the vessel-segmentation literature is **0.80-0.82
+Dice** against DRIVE's first observer. Both ceilings measured here sit
+below that: 0.7765 on CHASE_DB1, 0.7879 on DRIVE.
+
+**What is not being claimed.** No paper has been audited here. No
+specific published result is being called wrong, and none could be on
+this evidence — this project trained no vessel model at the time of
+writing and re-ran nobody's code. The observation is that two numbers
+which are usually quoted separately sit in a surprising order when put
+next to each other.
+
+**The benign explanations are real and probably sufficient.** At least
+two are strong enough that they should be the default reading:
+
+1. **Models are graded against observer 1 alone.** Observer 1's
+   annotations are the reference standard; observer 2's exist only as a
+   human comparator. A model trained on observer 1's conventions is
+   optimising toward one annotator's specific habits — where they place
+   a boundary on a faint capillary, how far down the vessel tree they
+   keep labelling. Matching those habits more closely than a second
+   human does is an entirely coherent thing for a fitted model to
+   achieve, and it is not evidence of superhuman vessel perception. It
+   is evidence of successfully fitting a style.
+2. **These ceilings may not describe the data a given paper used.** They
+   were measured here, on these copies, with this binarisation. A paper
+   using a different preprocessing pipeline, a different test split, or
+   a differently-sourced copy of DRIVE is not necessarily operating
+   against the same ceiling — this project has already been caught out
+   once assuming a threshold transfers across preprocessing (§11), and
+   the same caution applies to itself.
+
+**The question worth asking.** Given that the ground truth is one
+observer's opinion, and that a second qualified observer reproduces it
+only ~78% by Dice, what does a score above ~78% actually certify? Three
+readings, and the field is better placed than this project to say which
+holds:
+
+- the model genuinely delineates vessels better than the second observer,
+  and observer 2 is simply the weaker annotator;
+- the model has fitted observer 1's idiosyncrasies, and the excess above
+  the ceiling measures style-matching rather than accuracy;
+- the metric saturates in a way that makes small differences near the
+  ceiling uninformative, so 0.80 and 0.78 are not meaningfully different
+  measurements at all.
+
+These have different consequences. Under the first, the number means what
+it appears to. Under the second, leaderboard gains above the ceiling
+partly measure conformity to one person, and a model tuned that way may
+transfer poorly to a site whose graders annotate differently — which
+would connect directly to the site-generalisation finding in §9-§11.
+Under the third, a good deal of reported progress is inside the noise.
+
+**A concrete way to settle it**, cheaper than re-auditing the
+literature: score a model against observer 2 as well as observer 1. If
+performance drops to around the inter-observer level, the model has
+learned observer 1's style. If it holds, it has learned vessels. That
+comparison requires only the second-observer masks, which — as §13
+documents — are the very thing the official distribution withholds. The
+data needed to check the question is the data that is hardest to obtain,
+which may be part of why the question is not routinely asked.
+
+---
+
 ## Interview questions
 
 1. **Why does patient-level splitting matter more here than in, say, chest
