@@ -1712,10 +1712,15 @@ gated, essentially the entire EyePACS dataset would have been rejected.
 n x n distance matrix via `squareform`: 0.46GB peak at ODIR-5K's n=6,392, but
 13.79GB at EyePACS's n=35,126, against 7.8GB of RAM and an 18.3GB commit
 limit. Not a threshold problem -- an O(n^2) memory problem that is invisible
-at the scale it was written against. Deliberately not rewritten: candidate
-counts scale with n^2 too (31,084 candidates at n=6,392 implies ~930,000 at
-n=35,126), each needing two image loads for pixel verification, so fixing the
-memory would only expose a worse wall in the verification stage.
+at the scale it was written against. The decision at the time was not to
+rewrite it: candidate counts scale with n^2 too (31,084 candidates at
+n=6,392 implies ~930,000 at n=35,126), each needing two image loads for
+pixel verification, so fixing the memory looked like it would only expose
+a worse wall in the verification stage. **Revisited later and rewritten
+after all** (chunked popcount, 281MB, byte-identical output) -- the full
+scan ran, the predicted ~930,000 candidates came in at 1,005,485, and the
+wall that remained was algorithmic rather than about memory. See the
+transitive-chaining entry and WALKTHROUGH.md section 12.
 
 ### Duplicates: the largest divergence, verified by eye
 
@@ -1729,11 +1734,23 @@ question is actually answerable:
 | verified unique pairs | 11 | **444** |
 | duplicate images | 22 | 476 |
 | duplicate clusters | 11 | **118** |
-| same image under two different patient IDs | 8 | **441** |
+| same image under two different patient IDs | 11 (all of them) | **441** |
 | — verified pairs per 1,000 images | 1.7 | **69.5** |
-| — cross-patient per 1,000 images | 1.3 | **69.0** |
+| — cross-patient per 1,000 images | 1.7 | **69.0** |
 | clusters straddling image_random | 3 (27%) | 75 (64%) |
 | clusters straddling patient_group | 2 (18%) | **68 (58%)** |
+
+**Units correction, found in the final consistency audit.** This row
+originally read `8` for ODIR-5K against `441` for EyePACS. The 8 is the
+number of distinct *patient pairs* (§7 of WALKTHROUGH.md states it
+correctly as "8 confirmed duplicate pairs (11 pair-instances)"), while
+441 counts *image pairs* — so the table compared two different units in
+one row and flattered ODIR-5K by a third. Re-derived from
+`artifacts/duplicates.parquet`: all 11 ODIR-5K duplicate clusters are
+cross-patient, spanning 8 patient pairs because 352↔973, 398↔668 and
+2487↔3185 are each duplicated on *both* eyes. Counted consistently the
+cross-patient rate is 1.7/1,000, identical to the all-pairs rate, and the
+EyePACS ratio is ~40x on both rows rather than ~53x on this one.
 
 Before trusting 441 cross-patient integrity issues, the obvious confound was
 tested: EyePACS has many near-black failed captures (16.9% reject rate, some

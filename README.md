@@ -13,7 +13,7 @@ insufficient for the next**:
 |---|---|---|---|
 | **1** | Image-level splits leak **patients** | 42.0% of patients cross a fold<br>(46.5% of two-eye patients) | **45.9%** |
 | **2** | Patient-level splits leak **sites** | site recoverable **84.0%** vs 29.3% baseline;<br>entangled with diagnosis χ²=115.2 | **93.2%** vs 29.6%;<br>χ²=139.6 |
-| **3** | Neither catches **duplicated patients** | 11 pairs (**1.7/1,000**),<br>8 under two patient IDs<br>*whole dataset, n=6,392* | **444 pairs (69.5/1,000)**,<br>441 under two patient IDs<br>*subsample, n=6,392 of 35,126* |
+| **3** | Neither catches **duplicated patients** | 11 pairs (**1.7/1,000**),<br>all 11 under two patient IDs<br>*whole dataset, n=6,392* | **444 pairs (69.5/1,000)**,<br>441 under two patient IDs<br>*subsample, n=6,392 of 35,126* |
 
 Measured on two datasets from different continents, populations and
 imaging programmes — ODIR-5K (6,392 images, multi-centre Chinese) and
@@ -62,8 +62,10 @@ The model here is deliberately boring. The data path is the contribution.
 **Live reports:** [combined QC & findings report](https://anurag-yadaviih.github.io/retinal-dataset-audit/qc_report.html)
 (start here) &middot; [dataset EDA](https://anurag-yadaviih.github.io/retinal-dataset-audit/eda_report.html)
 &middot; [leakage-findings charts](https://anurag-yadaviih.github.io/retinal-dataset-audit/findings_report.html).
-Static snapshots as of this commit — see [Pipeline](#pipeline) below to
-regenerate them from the real dataset.
+Static snapshots as of this commit. **[docs/REPRODUCING.md](docs/REPRODUCING.md)
+lists every headline number in this document with the exact command that
+regenerates it, and marks the ones that cannot be regenerated** — read
+that before trusting any figure here.
 
 ---
 
@@ -449,13 +451,21 @@ excluded — a merged bucket, not a real site), 3 seeds each:
 
 | Held-out site | n_test | abnormal frac | gap vs B |
 |---|---|---|---|
-| site_0 (original arm E) | 1982 | 0.630 | **−0.0529** |
+| site_0 (the original arm E fold) | 1982 | 0.630 | **−0.0529** |
 | site_1 | 501 | 0.489 | **−0.0334** |
 | site_2 | 404 | 0.384 | **−0.0368** |
 | site_3 | 379 | 0.491 | **−0.0339** |
 | site_4 | 336 | 0.452 | **+0.0208** |
 
 ![4/5 held-out sites replicate the drop -- site_4 doesn't](docs/figures/leave_one_site_out.png)
+
+*Three numbers for arm E's gap appear in this document and they are not
+inconsistent: **−0.0557** is the headline 5-seed run, **−0.0545** is the
+5-seed retrain that saved per-example predictions for prevalence-matching,
+and **−0.0529** is site_0 under the 3-seed leave-one-site-out sweep. The
+fold sizes in the table above are also post-`enforce_patient_site_
+consistency`, so site_1/2/4 read 501/404/336 where the pre-fix
+`domain_shift_audit.json` has 499/402/335.*
 
 4 of 5 held-out sites replicate the direction — not just the one site
 that happened to land in the original split. **site_4 is a genuine,
@@ -505,15 +515,26 @@ EyePACS figures are *not* dataset totals.
 | Images scanned | 6,392 (**whole dataset**) | 6,392 (**subsample of 35,126**) |
 | Verified duplicate pairs | 11 | **444** |
 | — per 1,000 images | 1.7 | **69.5** |
-| Same image under two *different* patient IDs | 8 | **441** |
-| — per 1,000 images | 1.3 | **69.0** |
+| Same image under two *different* patient IDs | 11 (all of them) | **441** |
+| — per 1,000 images | 1.7 | **69.0** |
 | Duplicate clusters | 11 | 118 |
 | Clusters straddling `patient_group` | 2 (18%) | **68 (58%)** |
 
+**A units note, because an earlier version of this table got it wrong.**
+Every row counts *image pairs*. ODIR-5K's 11 pairs span only **8 distinct
+patient pairs**, because three of those patient pairs are duplicated on
+*both* eyes (352↔973, 398↔668, 2487↔3185) — and earlier drafts put that
+8 in the cross-patient row beside EyePACS's 441, which counts pairs. That
+silently compared patient pairs against image pairs and flattered ODIR-5K.
+Counted consistently, **all 11 of ODIR-5K's duplicate pairs are
+cross-patient**, so its two rates are identical at 1.7 per 1,000.
+
 At matched scale, EyePACS carries roughly **40x the duplicate rate** —
-69.5 against 1.7 pairs per 1,000 images. The per-1,000 rate is the
-comparable quantity here *because* both were measured at n=6,392; it is
-not scale-invariant, for reasons the next section makes concrete.
+69.5 against 1.7 pairs per 1,000 images, and the same ≈40x on the
+cross-patient row now that both are counted the same way. The per-1,000
+rate is the comparable quantity here *because* both were measured at
+n=6,392; it is not scale-invariant, for reasons the next section makes
+concrete.
 
 ### The full-dataset count is unknown, and does not scale linearly
 
@@ -599,9 +620,10 @@ visits is not something these data can distinguish.
 
 ### ODIR-5K: the same problem, two orders of magnitude smaller
 
-**Eight genuine cross-patient duplicates exist in the raw data**, confirmed
-by pixel difference near zero despite different file encoding — the same
-photograph, filed under two different patient IDs, in every case: patients
+**Eleven genuine cross-patient duplicate pairs exist in the raw data**,
+spanning eight distinct patient pairs — confirmed by pixel difference near
+zero despite different file encoding, the same photograph filed under two
+different patient IDs in every case: patients
 352↔973, 398↔668, and 2487↔3185 (each duplicated on *both* eyes), plus
 321↔1043, 3297↔4542, 31↔105, 1109↔1166, and 4330↔4552 (one eye each).
 This is exactly why this pipeline needs both a grouped split *and* a
@@ -761,25 +783,35 @@ measured **against labels**. This strand is not a fourth rung on that
 ladder — it runs alongside all three and asks the question they all
 assume away: what are those labels worth?
 
-Segmentation is the one place in ophthalmic imaging where that question
-has a clean answer, because a few datasets ship the **same images graded
-twice, independently, by different people**. Two of them do:
+Segmentation is where this project could get a clean answer, because a
+few datasets ship the **same images graded twice, independently, by
+different people** — and a classification label almost never comes that
+way. Two of them do:
 
 | dataset | structure | n | observer 1 vs observer 2 (Dice) |
 |---|---|---|---|
 | DRIVE | vessels | 20 | 0.7879 ± 0.0206, 95% CI [0.7789, 0.7969] |
+
+*Measured at each dataset's native resolution. DRIVE's ceiling appears
+below as **0.7882** — the same quantity recomputed on the 512×512 grid the
+model predicts on, so that the model and the humans are scored the same
+way. The 0.0003 difference is resampling, not a second result.*
 | CHASE_DB1 | vessels | 28 | 0.7765 ± 0.0250, 95% CI [0.7673, 0.7858] |
 
 Two datasets, two countries, two annotation teams, and the same answer:
 **qualified graders agree about 78% on where a retinal vessel is.** That
-is a ceiling, and it reframes every vessel number in the literature. A
-model reported at Dice 0.80 is not 20 points short of perfect; it is
-already at the limit of what the reference standard can resolve.
+is a ceiling, and it changes how a vessel number should be read: a model
+reported at Dice 0.80 is not 20 points short of perfect, it is already at
+the limit of what *these* reference standards can resolve. Two datasets
+is two datasets — WALKTHROUGH.md §14 states the falsifiable version, that
+a third two-observer vessel set landing near 0.78 would strengthen this
+and one landing at 0.85 would refute it.
 
 ### A model that reaches the ceiling and stops
 
-A U-Net was trained on DRIVE's 20 training images, on observer 1's masks
-only, and scored on DRIVE's 20 test images against **both** observers —
+A U-Net was trained on DRIVE's 20 training images (16 train, 4 held out
+for validation) on observer 1's masks only, and scored on DRIVE's 20 test
+images against **both** observers —
 the same 20 images the ceiling was measured on, which is what makes the
 comparison commensurable rather than merely suggestive. (The optic disc
 model could not be used for this: a disc is one convex blob where
@@ -909,7 +941,7 @@ quality  -> gradability score, reject list
 dedupe   -> perceptual hash + embedding near-duplicates
 split    -> image_random (wrong) vs patient_group (right)
 train    -> ResNet18 binary normal/abnormal
-experiment -> arms A/B/C/D/E, matched sizes
+experiment -> arms A/B/C/D/E (natural sizes; see the split-then-curate fix)
 report   -> self-contained HTML QC report
 
 mask_quality -> mask/image alignment, empty, area-outlier, component checks
@@ -931,7 +963,7 @@ segment      -> U-Net optic disc + vessel baselines, scored against the
 | Patient-level labels | N, D, G, C, A, H, M, O (8 classes) |
 | Task here | Binary: normal vs abnormal |
 | Licence | *Check the Kaggle page and record the exact terms here before publishing results.* |
-| Known limitations | Class imbalance (55% abnormal under the default label rule); 324/3358 patients (9.6%) have only one usable eye in `preprocessed_images/`, so "two eyes per patient" cannot be assumed anywhere in the code; **camera/site confound across centres, confirmed not hypothetical** (chi2=115.18, p=8.8e-16 against diagnosis — see "Cross-camera domain-shift audit" below); annotation quality varies; **quality scoring does not reliably catch uniform haze** (dense cataract / severe media opacity) — two essentially featureless, uniformly hazy images score 0.943 and 0.979, near the top of the entire dataset (see below) |
+| Known limitations | Class imbalance (55% abnormal under the default label rule); 324/3358 patients (9.6%) have only one usable eye in `preprocessed_images/`, so "two eyes per patient" cannot be assumed anywhere in the code; **camera/site confound across centres, confirmed not hypothetical** (chi2=115.18, p=8.8e-16 against diagnosis — see [Level 2](#level-2-patient-level-splits-leak-sites)); annotation quality varies; **quality scoring does not reliably catch uniform haze** (dense cataract / severe media opacity) — two essentially featureless, uniformly hazy images score 0.943 and 0.979, near the top of the entire dataset (see below) |
 
 At the extremes, the gradability score matches what these images actually
 look like — a basic sanity check with no ground-truth quality labels to
@@ -1006,8 +1038,7 @@ On Windows, use [`scripts/setup_env.ps1`](scripts/setup_env.ps1) rather than
 the generic Quickstart below — it's documentation-as-script for exactly how
 this project's dev environment is built, including the parts that are easy
 to get wrong (torch is a separate, opt-in, 2-3 GB step; see
-[Non-negotiable rules](CLAUDE.md) on staying CPU-first for everything except
-`train`).
+the CPU-first rule for everything except `train`).
 
 ```powershell
 # Anaconda users: run this first, however many envs are stacked.
@@ -1079,34 +1110,87 @@ pytest
 
 ---
 
-## Roadmap
+## Scope: what is built, what is not, and why
 
-Deliberately not built yet. Listed so the scope is honest rather than padded.
+Five things were deliberately not built. Each is listed with the reason,
+because a list of unfinished items says less than a list of decisions.
 
-- [x] U-Net optic disc segmentation baseline (IDRiD, 81 images) — done, see
-      "The fourth strand" above; the interesting part is the three failures
-- [x] Mask and annotation QC: alignment, empty masks, area outliers, connected
-      components — done, validated by injecting each defect into synthetic masks
-- [x] Inter-grader agreement (Dice, IoU) on **two** dual-graded datasets —
-      done. Scoped originally to CHASE_DB1 alone because DRIVE's official
-      distribution withholds its test annotations; widening the search found
-      mirrors that carry the second observer, so DRIVE is included with an
+**REFUGE held-out-device experiment — the direct segmentation parallel to
+arm E.** REFUGE splits by *device* on purpose: 400 Zeiss Visucam 500
+images at 2124×2056 for training, 800 Canon CR-2 at 1634×1634 for
+validation and test. That is a built-in, documented domain shift of
+exactly the kind arm E had to construct by hand for classification —
+train on one device, evaluate on another, measure the drop. The dataset
+choice and the experiment design are settled; it is deferred only because
+it needs grand-challenge.org registration, and because REFUGE's seven
+graders were merged into one reference before release (WALKTHROUGH.md
+§13), so it can supply the device experiment but not a second
+inter-grader ceiling.
+
+**DICOM PHI stripping — deferred because the problem is invisible from
+outside a hospital.** This is the honest reason, and it is worth stating
+rather than leaving as an unticked box: *no public ophthalmic dataset
+ships DICOM.* Public releases are de-identified and converted to JPEG or
+TIFF before publication, so every header this code could strip has
+already been discarded upstream by whoever prepared the release. Building
+tag-stripping here would mean writing it against synthetic DICOMs and
+claiming a capability nothing in reach could exercise. The work is real,
+but it belongs to whoever has PACS access; from a Kaggle zip, it cannot
+be tested, only asserted.
+
+**Burned-in patient text detection — the part tag-stripping cannot
+solve.** The complement of the above, and the more interesting half.
+Stripping DICOM tags does nothing about identifiers rendered into the
+*pixels*: name and MRN overlays, date stamps, device banners. Those
+survive de-identification, JPEG conversion, resizing, and every
+preprocessing step in this pipeline, because to every tool in the chain
+they are simply image content. This is detectable from public data in
+principle — it needs OCR or a text-region detector over the frame —
+and unlike tag-stripping it stays a live risk after the data leaves the
+hospital. Not built; flagged as the more important of the two.
+
+**Complete-linkage clustering, to fix the transitive-chaining defect.**
+Union-find over thresholded pairs implements single-linkage, so A~B and
+B~C merge however far apart A and C are. At n=6,392 the largest cluster
+held 46 images; at n=35,126 two clusters held 1,870 and 1,797, with
+sampled members 7.9–9.6 apart against a threshold of 5.0. The fix is
+complete-linkage within each connected component — a component is a
+candidate set, not a conclusion — and WALKTHROUGH.md §12 works through
+why lowering the threshold is the *wrong* fix. Not implemented because
+the full-scan cluster output it would rescue is not used for any reported
+number; the defect is documented instead, which is the honest handling
+when the analysis it would enable was never relied on.
+
+**Recall-weighted (Tversky, β>α) retraining on DRIVE.** The one cheap
+run that would falsify this project's explanation for its own failed
+prediction. The vessel model sides with the observer it never trained on
+44.5% of the time, and the proposed reason is that a Dice+BCE objective
+rewards conservative foreground, pulling the model away from the more
+liberal annotator that trained it. If that is right, a recall-weighted
+loss should push predicted foreground above observer 1's 8.76% and flip
+side-taking above 0.5. One retraining run on 16 images. Stated in
+WALKTHROUGH.md §16 *before* anyone runs it, and left explicitly untested
+rather than quietly dropped — it is the obvious next experiment for
+anyone continuing this.
+
+**Built, for contrast:**
+
+- [x] Three-level leakage hierarchy, measured end to end on two datasets
+- [x] Cross-camera domain-shift audit via a site classifier — see
+      [Level 2](#level-2-patient-level-splits-leak-sites)
+- [x] Site-level splitting (arm E) and its robustness checks —
+      prevalence-matching, leave-one-site-out, fold-size-aware CIs
+- [x] EyePACS adapter and full external validation on a second dataset
+- [x] Chunked dedupe rewrite, enabling the full 35,126-image scan
+- [x] U-Net optic disc and vessel baselines — the interesting part is the
+      three disc failures, not the means
+- [x] Mask and annotation QC, validated by injecting each defect into
+      synthetic masks
+- [x] Inter-grader agreement on **two** dual-graded datasets. Originally
+      scoped to CHASE_DB1 alone because DRIVE's official distribution
+      withholds its test annotations; widening the source search found
+      mirrors carrying the second observer, so DRIVE is included with an
       explicit provenance caveat (WALKTHROUGH.md §13)
-- [ ] Recall-weighted (Tversky, β>α) retraining on DRIVE — the one cheap run
-      that would falsify the conservative-objective explanation for why the
-      model sides with the observer it never trained on (WALKTHROUGH.md §16)
-- [ ] **REFUGE held-out-device experiment — the direct segmentation parallel to
-      arm E.** REFUGE splits by *device* on purpose: training is 400 Zeiss
-      Visucam 500 images at 2124×2056, validation and test are 800 Canon CR-2
-      at 1634×1634. That is a built-in, documented domain shift of exactly the
-      kind arm E constructed by hand for classification — train on one device,
-      evaluate on another, and measure the drop. Deferred only because it needs
-      grand-challenge.org registration; the dataset choice and the experiment
-      design are settled.
-- [ ] DICOM PHI stripping and burned-in patient-text detection on the image itself
-- [x] Cross-camera domain shift audit via a site classifier — done, see below
-- [x] EyePACS adapter + full external validation of the audit on a second dataset — done, see "External validation: EyePACS" above
-- [x] Site-level splitting (arm E), motivated directly by the audit above — done, see "Level 2" above
 
 ---
 
@@ -1119,8 +1203,10 @@ src/retinaprep/           the pipeline, one module per stage
 tests/                    synthetic fixtures, no download needed
 scripts/download_data.sh  Kaggle fetch
 artifacts/                all outputs (gitignored)
-CLAUDE.md                 build instructions
+notebooks/                one-off audits + figure generation
+docs/                     reports, notes, reproducibility manifest
 WALKTHROUGH.md            design decisions + interview prep
+docs/REPRODUCING.md       every headline number and how to regenerate it
 ```
 
 ---

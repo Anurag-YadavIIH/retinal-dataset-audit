@@ -218,7 +218,7 @@ img { max-width: 100%; }
 <p class="interp">
   quality.py scores every image on blur, exposure, and illumination
   uniformity; images below the configured threshold are logged to
-  rejects.csv with a reason, never silently dropped (CLAUDE.md rule 7).
+  rejects.csv with a reason, never silently dropped.
 </p>
 <h3>Quality score distribution</h3>
 <p>

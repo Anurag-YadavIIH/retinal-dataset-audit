@@ -23,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--split", default=None, help="Split name for train (image_random|patient_group)"
     )
-    p.add_argument("--arm", default=None, help="Experiment arm: A, B, C or D")
+    p.add_argument("--arm", default=None, help="Experiment arm: A, B, C, D or E")
     return p
 
 

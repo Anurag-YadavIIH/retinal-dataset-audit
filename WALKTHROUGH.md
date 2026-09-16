@@ -2,33 +2,47 @@
 
 > Written for a reader who has to defend this project in a technical interview.
 > **Read this file before reading the code.**
+>
+> Every number below is either regenerable from a command or explicitly
+> marked as not: `docs/REPRODUCING.md` is the manifest. §18 is the closing
+> summary, and the fastest way in if you are reading cold.
 
 ## 1. The claim
 
 The claim, stated as the hierarchy it turned out to be rather than the
 single number the project started with: **splitting by image leaks
-patients; splitting by patient leaks sites instead; only splitting by
-site isolates the disease signal.** Each level of grouping is
-necessary and, on its own, insufficient for the level above it. All
-three rungs are measured directly in this project, not asserted:
+patients; splitting by patient leaks sites instead; and neither one
+catches the same eye filed under two different patient IDs.** Each
+level of grouping is necessary and, on its own, insufficient. All three
+levels are measured directly in this project, not asserted — the
+numbering here matches README.md's, so the two documents can be read
+against each other:
 
 1. **Image-level splitting leaks patients** — 42.0% of patients cross
-   a naive train/test boundary (§1 below, exact count).
+   a naive train/test boundary (the rest of this section, exact count).
 2. **Patient-level splitting leaks sites instead** — a classifier
    recovers which clinic captured a *preprocessed* photo 84% of the
-   time, and site is entangled with diagnosis at p≈1e-16 (§5 and the
-   domain-shift audit in §9).
-3. **Site-level splitting (arm E) isolates the signal, at a measured
-   cost**: AUROC drops over 3x the size of the original patient-level
-   effect when entire sites are actually held out, the cleanest,
-   Bonferroni-surviving result in this project (§9).
+   time, site is entangled with diagnosis at p≈1e-16, and holding out
+   whole sites (arm E) costs AUROC over 3x the size of the original
+   patient-level effect — the cleanest, Bonferroni-surviving result
+   here (the domain-shift audit and arm E, both in §9).
+3. **Neither split catches duplicated patients** — the same photograph
+   filed under two different declared IDs is invisible to grouping by
+   declared ID. 11 verified pairs in ODIR-5K, 444 in an equal-sized
+   EyePACS sample, 58% of whose clusters straddle a patient-grouped
+   split anyway (§7, §11, §12).
 
-The rest of this section works through rung one in the detail it was
-originally measured in; rungs two and three get the same treatment in
-§9, once the machinery (splitting, curation, the experiment arms) that
-rung one motivated has been introduced. Read as one arc, not three
-separate findings: the project's central result is the hierarchy, not
-any single rung of it.
+Running alongside all three rather than after them, a **fourth strand**
+asks what the labels those levels are measured against are worth:
+§§13-17, on segmentation, inter-grader ceilings, and where a model
+graded against one human actually lands.
+
+The rest of this section works through level one in the detail it was
+originally measured in; levels two and three get the same treatment in
+§9 and §§7/11/12, once the machinery (splitting, curation, the experiment
+arms) that level one motivated has been introduced. Read as one arc, not
+three separate findings: the project's central result is the hierarchy,
+not any single level of it.
 
 Splitting a fundus dataset by image instead of by patient inflates measured
 model performance, because bilateral disease correlation and repeat-visit
@@ -175,8 +189,8 @@ actually quantify each one:
 3. **Repeat visits and same-session recaptures.** A clinic re-photographs
    a bad capture, or the same patient returns for a follow-up. This
    project found a concrete instance of the *adjacent* problem — the same
-   underlying photograph filed under two **different** patient IDs (8
-   confirmed pairs, pixel-verified) — which patient-grouped splitting
+   underlying photograph filed under two **different** patient IDs (11
+   confirmed pairs across 8 patient pairs, pixel-verified) — which patient-grouped splitting
    cannot catch, because it only groups by *declared* patient ID, and
    these are declared differently. Only deduplication closes that gap;
    splitting strategy and deduplication defend against genuinely different
@@ -460,7 +474,8 @@ consistency) is in `docs/notes.md`; the headline of it:
   significant, 3/5," n=5 was always going to be this fragile.
 
 Curation earning its place in this pipeline by catching a real integrity
-problem (8 cross-patient duplicate pairs, §7) rather than by improving a
+problem (11 cross-patient duplicate pairs over 8 patient pairs, §7)
+rather than by improving a
 metric turned out to be literally the honest description for arm D, and
 worth stating just as plainly for arm C, which *did* move a metric — just
 not in the direction curation is usually assumed to move it, and not by
@@ -622,7 +637,7 @@ silent default.
 
 ### Cross-camera domain-shift audit: site is recoverable, and it's entangled with diagnosis
 
-Roadmap item 2. ODIR-5K mixes Canon, Zeiss and Kowa across several
+ODIR-5K mixes Canon, Zeiss and Kowa across several
 Chinese centres with no explicit camera/site column — raw image
 resolution (before this project's preprocessing resizes everything to a
 common 512x512) stands in as a proxy. Stated once, applies throughout:
@@ -681,7 +696,7 @@ proportional, no site concentrated into one fold. The result stands.
 
 **Then the direct experiment**: arm E holds out entire sites
 (`splits.site_group_split`, same persisted-split discipline as the
-item-1 fix). Patient-level integrity comes free — 99.0% of two-eye
+split-then-curate fix above). Patient-level integrity comes free — 99.0% of two-eye
 patients share one site, so grouping by site overwhelmingly keeps a
 patient's eyes together too — though not perfectly (6 patients straddle
 a fold boundary under `site_group` vs 0 under `patient_group`, checked
@@ -872,7 +887,8 @@ columns, and downloading its actual 183KB label CSV showed 46 disease
 columns and no patient field at all. Checking the primary artifact cost
 one minute and prevented a wasted 8GB download and a wrong conclusion.
 IDRiD is single-camera, single-clinic (516 images — no site
-heterogeneity to find *by construction*). BRSET has ideal structure but
+heterogeneity to find *by construction*; its 81-image segmentation subset
+is used later, in §§13-17, for a different question entirely). BRSET has ideal structure but
 needs PhysioNet credentialing. Only the labelled train split was pulled:
 35,126 images, ~32.6GB instead of ~82GB, because every check needs one
 labelled pool with patient IDs, not a train/test comparison.
@@ -947,9 +963,14 @@ At matched size — 6,392 images each, which is ODIR-5K's *whole dataset*
 but a *subsample* of EyePACS's 35,126 — EyePACS has **444 verified
 duplicate pairs against ODIR-5K's 11** (69.5 vs 1.7 per 1,000 images),
 and **441 cases of the same eye filed under two different patient IDs**
-against ODIR-5K's 8 (69.0 vs 1.3 per 1,000). The EyePACS figure is not a
-dataset total: the full-dataset count is higher but unmeasured, and does
-not scale linearly, since candidate pairs grow quadratically with n.
+against ODIR-5K's 11 — all of ODIR-5K's are cross-patient — so 69.0 vs
+1.7 per 1,000, roughly 40x on both rows. (Those 11 ODIR-5K pairs span
+only **8 distinct patient pairs**, since three pairs of records are
+duplicated on both eyes; §7 counts it that way, and an earlier version of
+this comparison wrongly put that 8 up against EyePACS's pair count. Both
+columns count image pairs now.) The EyePACS figure is not a dataset
+total: the full-dataset count is higher but unmeasured, and does not
+scale linearly, since candidate pairs grow quadratically with n.
 
 The obvious confound was tested before believing it: EyePACS has many
 near-black failed captures, and two blank frames would pass both the
@@ -970,15 +991,26 @@ demonstrates it at 34x the cluster count in a real screening archive.
 
 ### A scaling limit found the hard way
 
-`phash_duplicates` builds a full n×n distance matrix via `squareform`:
+`phash_duplicates` built a full n×n distance matrix via `squareform`:
 0.46GB at ODIR-5K's n=6,392, but **13.79GB at EyePACS's n=35,126**
 against 7.8GB of RAM. An O(n²) memory bug invisible at the scale it was
-written against. Deliberately *not* rewritten: candidate counts scale
-with n² as well (31,084 candidates at n=6,392 implies ~930,000 at
+written against.
+
+The first decision here was *not* to rewrite it: candidate counts scale
+with n² as well (31,084 candidates at n=6,392 implied ~930,000 at
 n=35,126, each needing two image loads to verify), so fixing the memory
-would only expose a worse wall downstream. The honest answer was to run
-the comparison at matched size and report the scaling limit as a
-finding.
+looked like it would only expose a worse wall downstream. The comparison
+was run at matched size and the scaling limit reported as a finding.
+
+**That was later revisited and the rewrite was done** — a chunked
+popcount formulation costing 281MB, verified byte-identical to the old
+implementation and reproducing ODIR-5K's committed 13,733 candidates
+exactly. It made the full 35,126-image scan possible (~9 CPU-hours;
+the predicted ~930,000 candidates came in at **1,005,485**, essentially
+exactly quadratic at n^2.03). The scan's *cluster-level* output is still
+unusable, but for an algorithmic reason rather than a hardware one — see
+§12. The memory fix removed the hardware limit and left the method
+defect standing, which is the more interesting half of the story.
 
 ### Process failures worth owning
 
@@ -1186,7 +1218,7 @@ ships.
 
 ## 13. A provenance finding: the multi-grader data these datasets are famous for
 
-Before any segmentation code was written, Step 0 for item 4 checked what
+Before any segmentation code was written, a scoping pass checked what
 is actually obtainable. Two of the most-cited segmentation datasets in
 retinal imaging turn out not to ship, through their primary channels, the
 multi-grader annotations their reputations rest on. This is a finding
@@ -1255,8 +1287,8 @@ was checking more sources before asserting a negative.
 
 ### REFUGE: seven graders, one released reference
 
-The same shape of gap, for the same reason, in the other dataset item 4
-considered. REFUGE's optic disc and cup annotations were produced by
+The same shape of gap, for the same reason, in the other dataset that
+scoping pass considered. REFUGE's optic disc and cup annotations were produced by
 **seven independent glaucoma specialists**, then merged by a senior
 specialist into a single reference standard. The merged reference is what
 ships; the seven individual annotations are not released.
@@ -1270,9 +1302,18 @@ The variance was measured and then averaged away before distribution.
 
 Two of the most-cited retinal segmentation datasets, and neither ships
 usable multi-grader data through its primary channel: DRIVE withholds it,
-REFUGE merges it. **CHASE_DB1 carries this project's inter-grader work
-by default rather than by preference** — 28 images, two observers
-(`1stHO`/`2ndHO`), 56 masks, verified present by file listing.
+REFUGE merges it. At the time this section was written that left
+**CHASE_DB1 carrying the inter-grader work by default rather than by
+preference** — 28 images, two observers (`1stHO`/`2ndHO`), 56 masks,
+verified present by file listing.
+
+**That is no longer where it ended up.** Widening the source search (the
+table above) turned up mirrors that do carry DRIVE's second observer, so
+§14 reports *two* dual-graded datasets rather than one — with an explicit
+provenance caveat attached to every DRIVE number, because a third-party
+re-upload is what makes them possible. Two independent ceilings is the
+reason §14's agreement result can be called a transfer at all instead of
+a single measurement.
 
 There is a general lesson worth stating for anyone planning work that
 depends on annotation variance: **confirm the multi-grader data is in the
@@ -1310,6 +1351,14 @@ Inter-grader agreement on vessel annotation:
 |---|---|---|---|
 | CHASE_DB1 | 28 | **0.7765** ± 0.0250 | [0.7673, 0.7858] |
 | DRIVE | 20 | **0.7879** ± 0.0206 | [0.7789, 0.7969] |
+
+*Both measured at each dataset's native resolution, by
+`notebooks/inter_grader.py`. DRIVE's ceiling appears once more in §16 as
+**0.7882**, which is the same quantity recomputed on the 512×512 grid the
+model is evaluated on — a 0.0003 difference from the resampling, not a
+second result. §16 uses 0.7882 because comparing a model to a ceiling
+measured on a different grid would be the exact mistake §11 records about
+thresholds and preprocessing.*
 
 **0.0114 apart, with overlapping confidence intervals.** These are
 different annotators, in different countries, working from different
@@ -1413,12 +1462,6 @@ performance drops to around the inter-observer level, the model has
 learned observer 1's style. If it holds, it has learned vessels. That
 comparison requires only the second-observer masks, which — as §13
 documents — are the very thing the official distribution withholds. The
-**A concrete way to settle it**, cheaper than re-auditing the
-literature: score a model against observer 2 as well as observer 1. If
-performance drops to around the inter-observer level, the model has
-learned observer 1's style. If it holds, it has learned vessels. That
-comparison requires only the second-observer masks, which — as §13
-documents — are the very thing the official distribution withholds. The
 data needed to check the question is the data that is hardest to obtain,
 which may be part of why the question is not routinely asked.
 
@@ -1436,9 +1479,14 @@ The optic disc model could not be used for it — a disc is one convex
 blob where boundary disagreement is a small share of area, so disc Dice
 normally runs 0.90+, while vessels are almost entirely boundary. Putting
 a disc score beside a vessel ceiling would be a category error. So a
-U-Net was trained on DRIVE's 20 training images and evaluated on DRIVE's
-20 test images — the same images §14's ceiling was measured on, which is
-what makes the comparison commensurable rather than indicative.
+U-Net was trained on DRIVE's 20 training images (16 train, 4 held out for
+validation) and evaluated on DRIVE's 20 test images — the same images
+§14's ceiling was measured on, which is what makes the comparison
+commensurable rather than indicative. The ceiling row below is that same
+ceiling recomputed on the 512×512 grid the model predicts on (0.7882
+rather than §14's native-resolution 0.7879), so that all three rows are
+measured the same way; the whole point of the section is defeated if the
+model and the humans are scored on different grids.
 
 | | Dice | 95% CI |
 |---|---|---|
@@ -1636,6 +1684,101 @@ failures, no stronger claim is available.
 
 ---
 
+## 18. Closing: three predictions that failed
+
+The strongest evidence this project offers is not any of its findings. It
+is that three predictions were written down before the runs that would
+test them, all three failed, and all three are still in this document
+with the original wording intact.
+
+**1. That splitting by image would visibly inflate AUROC.** It did, by
++0.0173 across 5/5 seeds, uncorrected p=0.037 — and then it did not. A
+second run with the same nominal seeds and a training set matched within
+0.85% gave +0.0079, p=0.29, 3/5 seeds. A third, uncapped, gave +0.0183.
+The overlap itself is an exact count and never moved: 42.0% of patients
+land on both sides of a naive split, every time. What refused to
+replicate was the damage that overlap does to a metric. Both runs are
+reported, not the flattering one. **n=5 is the weakest thing here, and
+this is the direct evidence of it** — not a power calculation, an actual
+failed re-draw.
+
+**2. That quality curation was removing informative images.** Arm C
+scored *below* arm B by −0.0146, consistently across 5/5 seeds, and it
+was the only comparison in the entire project to survive Bonferroni
+correction. The flattering reading was available and plausible:
+hard-to-grade images are hard *because* they are diseased, so curation
+strips signal. Three hypotheses were tested instead of stopping there,
+and the winner was the unflattering one — B's and C's training sets,
+both exactly 4435 images, shared only 69.2% of those images, because the
+split was being recomputed per arm and `StratifiedGroupKFold` reshuffles
+fold membership from any small change to its input. Removing 43 *random*
+images reproduced the same 69.4% overlap, which meant the comparison was
+measuring a ~31% perturbation, not a 0.97% one. The split was fixed to
+filter a persisted base split rather than recompute; a prediction was
+written that the effect should mostly vanish; it went to **+0.0029,
+p=0.6160**. The project's one significant result was an artifact of the
+project's own experiment design.
+
+**3. That a model graded against one annotator would fit that
+annotator's style.** This was the sharp one, because the experiment
+existed to settle a question about the published literature. A U-Net
+trained on DRIVE's observer 1 should, on that hypothesis, agree with
+observer 1 more than with observer 2. The sign came back reversed: 0.7884
+against its own trainer, **0.8074** against the annotator it had never
+seen. Checking *where* it disagreed refuted the hypothesis a second time
+and more precisely — within the pixels the two humans actually dispute,
+the model backs its trainer only **44.5%** of the time, a confidence
+interval excluding 0.5 on the wrong side. The explanation offered (a
+Dice+BCE objective rewards conservative foreground, and observer 1 is the
+more liberal annotator) is itself untested, and §16 states what would
+falsify it before anyone runs it.
+
+Three others nearly went the same way and were caught before publication
+rather than after: a claimed n^2.55 "dense clique" scaling that measured
+**n^2.03** when the candidates were actually counted; an over-correction
+declaring EyePACS's duplicates a threshold artifact, refuted by ODIR-5K's
+own near-threshold pair showing identical vessel-residual character; and
+a conclusion that DRIVE's second observer was unobtainable, drawn from
+five sources and refuted by widening to 22. The final consistency audit
+found a seventh: a table row comparing ODIR-5K's *patient* pairs against
+EyePACS's *image* pairs, which had quietly flattered ODIR-5K by a third.
+
+### What this set out to measure, and what it found
+
+It set out to measure one thing: how much does splitting a fundus dataset
+by image instead of by patient inflate a reported score. That question
+turned out to be the shallowest of three.
+
+**What it found is a hierarchy in which each fix exposes the next leak.**
+Splitting by image leaks patients — 42.0%, an exact count. Splitting by
+patient leaks *sites* instead: a classifier recovers which clinic took a
+normalised photograph 84% of the time on ODIR-5K and 93% on EyePACS,
+site is entangled with diagnosis at p≈1e-16, and holding whole sites out
+costs **−0.0557 AUROC**, over three times the patient-level effect and
+the most statistically decisive result here. And neither split catches
+the same eye filed under two different patient IDs — 11 pairs in
+ODIR-5K, 444 in an equal-sized EyePACS sample, 58% of whose clusters
+straddle a correctly patient-grouped split anyway.
+
+Running alongside all three, a fourth strand asks what the labels every
+one of those numbers is measured against are actually worth. Two
+qualified humans agree about **78%** on where a retinal vessel is, on two
+unrelated datasets; a model trained on one of them reaches exactly that
+agreement and stops. And an optic disc model that reports a respectable
+0.86 mean fails outright on three of 27 images — not the badly
+photographed ones, which this project's own quality module would have
+had to flag and did not, but the ones carrying **5.5x** the hard-exudate
+burden of the rest. It degrades on the sickest eyes, which is backwards
+for anything called screening.
+
+### The one sentence
+
+If a reported number depends on how the data was divided, then the
+division is part of the result — and on this evidence, "we split by
+patient" is necessary, insufficient, and not the last question to ask.
+
+---
+
 ## Interview questions
 
 1. **Why does patient-level splitting matter more here than in, say, chest
@@ -1678,7 +1821,8 @@ failures, no stronger claim is available.
    patient ID, so two different IDs that are actually the same person's
    capture are treated as unrelated, and one copy can land in train while
    the other lands in test with zero warning. This project found exactly
-   this: 8 genuine cross-patient duplicate pairs (pixel-verified), which
+   this: 11 genuine cross-patient duplicate pairs, over 8 distinct pairs
+   of patient records (pixel-verified), which
    `patient_group_split` has no way to catch — only content-based
    deduplication does. It's the concrete argument in this codebase for why
    the pipeline needs both a grouped split *and* a dedupe stage, not just
@@ -1720,16 +1864,22 @@ failures, no stronger claim is available.
    project default switched to the per-eye `keywords` label instead.
 
 8. **How would you detect a camera or site confound?**
-   Not built here (see Limitations), but the method already used
-   elsewhere in this project generalises directly: stratify the quality
-   score distribution or the model's error rate by whatever proxy for
-   camera/site is available (image resolution before preprocessing,
-   metadata fields if present) and check whether either shifts
-   meaningfully between groups, the same way class balance was checked
-   before/after curation and reject rate was checked raw-vs-preprocessed.
-   A resolution-based proxy is plausible here specifically because the raw
-   `Training Images/` already showed 12+ distinct resolutions, which is
-   circumstantial evidence of a real camera mix worth stratifying by.
+   This is the question the project ended up organised around, so the
+   answer is what was actually done rather than what I would do. Three
+   escalating steps. **Build a proxy**: no dataset here ships a camera
+   column, so raw resolution before preprocessing stands in — 97 distinct
+   resolutions, DBSCAN-clustered to 20 site classes, stated everywhere as
+   a proxy that *under*-counts real sites. **Test whether it is
+   recoverable at all**: train a classifier to predict site from the
+   *already-normalised* images, so a positive result cannot be about pixel
+   dimensions — 0.8397 against a 0.2932 baseline on ODIR-5K, 0.9317 on
+   EyePACS. **Test whether it is entangled with the label**, because a
+   recoverable site only matters if it correlates with the answer —
+   chi2=115.18, p=8.8e-16. Then, only if all three hold, measure the cost
+   directly by holding whole sites out (arm E: AUROC −0.0557) instead of
+   stopping at the association. The generalisable part is the ordering:
+   proxy, recoverability, entanglement, cost — each step is only worth
+   running if the previous one came back positive.
 
 9. **What would you do differently if the downstream task were
    segmentation rather than classification?**
@@ -1742,9 +1892,13 @@ failures, no stronger claim is available.
    global gradability), and critically, the label pipeline — this project
    sidestepped by using an existing per-eye label; a segmentation project
    would need mask-level QC (empty masks, area outliers, annotator
-   agreement) as its own curation stage, which is exactly the kind of
-   thing flagged as future work in the README roadmap (REFUGE/IDRiD
-   segmentation, inter-grader agreement via DRIVE).
+   agreement) as its own curation stage. That is no longer hypothetical
+   here — §§13-17 build it: a mask-QC module validated by injecting each
+   defect into synthetic masks, inter-grader ceilings on two dual-graded
+   datasets, and the finding that matters most, which is that a model can
+   sit *at* the inter-grader ceiling, so a Dice reported against one
+   observer means little without knowing what two humans score against
+   each other.
 
 10. **Sensitivity at 95% specificity — why that operating point?**
     Because a screening tool's real deployment constraint is usually
@@ -1766,15 +1920,23 @@ failures, no stronger claim is available.
     true regardless of any downstream model result), but this particular
     model/task/dataset/seed-count combination isn't reliably showing a
     detectable downstream effect — and I'd say so plainly rather than
-    quietly reporting only the first, more favourable run. This project
-    also practices the same stance on the curation arms: C and D were
-    predicted in writing, before running them, to be statistically
-    indistinguishable from B. That held for D. It did *not* fully hold for
-    C, which showed a small but 5/5-consistent AUROC *decrease* — and I
-    report that as the surprising result it is, with a hypothesis for why
-    (curation matches training-set size, not composition), rather than
-    rounding it back to the predicted null because the null was what I
-    expected to find.
+    quietly reporting only the first, more favourable run. The curation
+    arms then ran the same course twice over, and the second half is the
+    better answer to this question. C and D were predicted in writing,
+    before running them, to be statistically indistinguishable from B.
+    That held for D. It did *not* hold for C, which showed a small but
+    5/5-consistent AUROC decrease that survived Bonferroni — the only
+    comparison in the project that ever did. I reported it as the
+    surprising result rather than rounding it back to the predicted null,
+    and formed a hypothesis for why: the split was being recomputed per
+    arm, so C and B shared only 69.2% of their training images despite
+    matched size. **Then I fixed the split and the finding disappeared**
+    (−0.0146 → +0.0029, p=0.6160). So the honest answer to "what would
+    you conclude from a near-zero gap" is the one I had to give when my
+    single significant result turned out to be an artifact of my own
+    experiment design: say so, keep the original numbers in the document,
+    and treat the prediction that survived removing the artifact as the
+    real result.
 
 12. **What is the single weakest part of this project?**
     n=5 seeds — and this project has direct, empirical proof of it, not
@@ -1783,7 +1945,7 @@ failures, no stronger claim is available.
     set matched within 0.85% of the original), was enough to flip the
     result from "significant, unanimous direction" to "not significant,
     3/5 agreeing." Every other number in this project — the 42.0%
-    overlap, the 77.8% concordance, the 8 verified duplicate pairs, the
+    overlap, the 77.8% concordance, the 11 verified duplicate pairs, the
     0.7% reject rate — is either an exact count or independently
     cross-checked by eye. The one number that matters most for the
     headline claim is the one resting on the thinnest statistical

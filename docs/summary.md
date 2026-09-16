@@ -55,8 +55,9 @@ though: any *individual* site's measurement is too imprecise to stand alone.
 **3. Neither split catches the same eye filed under two different patient
 records — and this was far worse in the screening archive.** Comparing
 equal-sized samples of 6,392 photographs each: the Chinese research
-dataset contained 8 such cases (1.3 per 1,000 images); the US screening
-archive contained **441 (69 per 1,000)** — roughly 50 times the rate.
+dataset contained 11 such cases (1.7 per 1,000 images, spanning eight
+distinct pairs of patient records); the US screening archive contained
+**441 (69 per 1,000)** — roughly 40 times the rate.
 Inspected at full resolution, these show the same eye — same vessel
 pattern, same optic disc — differing in colour processing rather than
 being identical files.
@@ -133,8 +134,11 @@ short of being right; it is already at the limit of what the reference
 standard can resolve. We checked this the direct way rather than
 asserting it: a model trained on one grader's outlines agreed with that
 grader **exactly as closely as the second human grader did** — 0.7884
-against 0.7882, a difference of two ten-thousandths. It had learned the
-task as well as the labels permit, and stopped there.
+against 0.7882, a difference of two ten-thousandths. On this measure, on
+these 20 images, it is as close to the reference standard as a second
+qualified human is — which is not the same as proving it has extracted
+everything the labels contain, but it does mean a higher score here would
+be hard to interpret.
 
 A prediction we made in advance turned out to be wrong, and is reported
 rather than deleted. We expected the model to absorb its own grader's
