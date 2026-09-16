@@ -75,6 +75,81 @@ two copies claim to be different patients. In the screening archive, 58% of
 duplicate groups still spanned the training/test divide *with correct
 patient-level splitting applied.*
 
+## A fourth question: how good is the ground truth itself?
+
+Everything above compares a model's answers against the labels. This part
+asks a different question, running alongside all three levels rather than
+after them: **what are the labels themselves worth?** One finding here is
+the one a clinician is most likely to act on, so it comes first.
+
+### A disc segmenter that breaks on florid retinopathy
+
+We trained a standard model to outline the optic disc on IDRiD, a
+diabetic retinopathy dataset that ships expert disc outlines. Averaged
+over its 27 test images it scores 0.86 on the usual overlap measure,
+which reads as respectable. **The average is misleading. Three of the 27
+fail outright**, two of them at worse than 50% overlap — the model places
+the disc in the wrong part of the retina, or scatters it across four or
+five separate patches.
+
+The three failures are not bad photographs. Our own image-quality module
+scores them slightly *better* than the other 24 and would have rejected
+none of them. What they have in common is disease. They carry about
+**five and a half times the hard exudate burden** of the other images,
+and two of them are the most and second-most exudate-heavy photographs in
+the entire test set. The model is mistaking bright yellow-white exudates
+for the optic disc, which under magnification is an entirely
+understandable confusion and an entirely unacceptable one.
+
+The clinical reading is direct. **Disc localisation degrades as exudate
+burden rises — it is least reliable on the sickest eyes, which are
+precisely the ones a screening programme exists to find.** An average
+score across a test set will not reveal this, because florid eyes are a
+minority in every test set. And disc outlining is usually not the end
+product: it feeds cup-to-disc ratio, image centring, and vessel-origin
+registration, so a silent failure on the most diseased images is carried
+forward into whatever is computed next, where it will present as a
+different problem entirely.
+
+Two things we will not paper over. A third failure does not fit this
+explanation at all — it is a relatively clean image, mid-range for
+exudate, and we have no account of it. And with only three failures the
+statistical support is suggestive rather than conclusive (p=0.06); the
+visual evidence and the rank-1-and-2 exudate placement are doing more
+work than the test is.
+
+### Two qualified graders agree only about 78% of the time
+
+A few public datasets have had the same photographs outlined twice, by
+different people, independently. On two of them — DRIVE (20 images,
+Netherlands) and CHASE_DB1 (28 images, a UK schoolchildren cohort) — we
+measured how much the two graders agree with *each other* about where the
+retinal vessels are. Two countries, two annotation teams, and the same
+answer: about **78% overlap**.
+
+That number is a ceiling, and it changes how a published figure should be
+read. A vessel-segmentation model reported at 80% is not twenty points
+short of being right; it is already at the limit of what the reference
+standard can resolve. We checked this the direct way rather than
+asserting it: a model trained on one grader's outlines agreed with that
+grader **exactly as closely as the second human grader did** — 0.7884
+against 0.7882, a difference of two ten-thousandths. It had learned the
+task as well as the labels permit, and stopped there.
+
+A prediction we made in advance turned out to be wrong, and is reported
+rather than deleted. We expected the model to absorb its own grader's
+habits, and therefore to match that grader better than it matched the
+other one. It did the opposite: it agreed slightly *more* with the grader
+whose work it had never seen. The likely reason is that the training
+objective rewards confident, well-supported markings, which pulls the
+model toward the more conservative of the two humans. That explanation is
+testable, and has not yet been tested.
+
+The practical caution is that all of this rests on 20, 27 and 28 images —
+that is simply how large the dual-graded public datasets are. We said so
+before running anything, and nothing above depends on a significance test
+that more images would have rescued.
+
 ## What this means, and what it does not
 
 - A reported accuracy figure means little without knowing how the data was
@@ -87,6 +162,12 @@ patient-level splitting applied.*
 - Duplicate records are a **separate** risk from splitting, easy to miss
   because they look like clean data, and materially more common in
   real-world screening archives than in curated research collections.
+- A segmentation percentage has **no meaning without a human-vs-human
+  reference** for the same task. Where we could measure one it was ~78%,
+  and the model reached it.
+- An average score hides the failures that matter clinically. Ours were
+  concentrated on the most diseased eyes, and the image-quality module
+  would not have caught a single one.
 - **What we have not shown:** that any specific published model, benchmark or
   cleared product was affected. We measured contamination in a dataset, not
   anyone's results; establishing impact would require re-running each study
@@ -111,6 +192,13 @@ patient-level splitting applied.*
    reported one dataset as 24 times worse than another; almost half that gap
    turned out to be a difference in how images had been resized before
    measurement, not in the photographs themselves.
+6. When a segmentation score is quoted, ask what **two humans** score against
+   each other on the same task and the same images. Without that scale, a
+   percentage cannot be interpreted — and a model already at the ceiling
+   cannot be improved by a better model, only by better labels.
+7. Ask how a model performs on the **most diseased** images specifically, not
+   just on average. Where we looked, the failures clustered exactly there and
+   were invisible in the mean.
 
 ## Bottom line
 
@@ -121,3 +209,8 @@ second dataset from another continent — coming out stronger there. Duplicate
 patient records are the third, independent problem that no splitting strategy
 can solve. Don't split retinal images by photograph; split by patient — and
 don't stop there, because that alone leaves the two larger leaks in place.
+
+Running underneath all three: the labels every one of these numbers is
+measured against are themselves only about 78% reproducible between two
+qualified humans, and a model that appears to be performing well on
+average may be failing silently on the sickest eyes in the set.

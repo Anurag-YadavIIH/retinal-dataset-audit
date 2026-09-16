@@ -1,4 +1,4 @@
-"""Seven PNGs for README.md, exported to docs/figures/.
+"""Eight PNGs for README.md, exported to docs/figures/.
 
 Designed for a README, not a notebook: readable at ~800px wide, large
 fonts, minimal chartjunk, and a title that states the finding rather
@@ -227,6 +227,58 @@ def cross_dataset_site() -> None:
     plt.close(fig)
 
 
+def inter_grader_ceiling() -> None:
+    """The segmentation strand's headline: a model trained on observer 1
+    lands exactly at inter-observer agreement, and is no closer to its own
+    training target than the other human is.
+
+    Numbers are literals from artifacts/drive_vessel/vessel_vs_ceiling.json,
+    which is produced by a training run over data that lives outside the
+    repo -- same convention as the CROSS_DATASET constants in
+    findings_charts.py. Error bars are 95% CIs on the mean rather than
+    per-image SDs, because the claim the chart makes is about the means:
+    the first two bars overlap almost exactly."""
+    labels = [
+        "observer 1\nvs observer 2\n(the ceiling)",
+        "MODEL\nvs observer 1\n(its target)",
+        "MODEL\nvs observer 2\n(never seen)",
+    ]
+    vals = [0.7882, 0.7884, 0.8074]
+    errs = [0.0091, 0.0101, 0.0113]  # 1.96 * SE, n=20
+    colours = [GREY, BLUE, GREEN]
+
+    fig, ax = plt.subplots(figsize=(9, 5.2))
+    x = np.arange(3)
+    bars = ax.bar(x, vals, yerr=errs, capsize=6, color=colours, width=0.6,
+                  error_kw={"linewidth": 2})
+    for bar, v in zip(bars, vals, strict=True):
+        ax.text(bar.get_x() + bar.get_width() / 2, v + 0.012, f"{v:.3f}",
+                ha="center", fontsize=19, fontweight="bold")
+    ax.axhline(0.7882, color=GREY, linestyle="--", linewidth=1.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=12)
+    ax.set_ylabel("Dice")
+    ax.set_ylim(0.74, 0.828)
+    # bracket spanning the two bars the headline is about, above their value
+    # labels so nothing collides
+    bracket_y = 0.8065
+    ax.plot(
+        [0, 0, 1, 1], [bracket_y, bracket_y + 0.0022, bracket_y + 0.0022, bracket_y],
+        color=GREY, linewidth=1.5, clip_on=False,
+    )
+    ax.text(
+        0.5, bracket_y + 0.0042, "indistinguishable -- 0.0002 apart",
+        ha="center", fontsize=12.5, color="#555555", style="italic",
+    )
+    fig.suptitle(
+        "The model reaches human-vs-human agreement, and stops",
+        fontsize=19, y=1.02,
+    )
+    fig.tight_layout()
+    fig.savefig(FIGURES_DIR / "inter_grader_ceiling.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def split_hierarchy() -> None:
     """Three-rung hierarchy in one AUROC chart: A (image_random) vs B
     (patient_group) vs E (site_group). Reuses findings_charts.py's data
@@ -330,6 +382,7 @@ FIGURE_NAMES = (
     "concordance",
     "ab_replication",
     "cross_dataset_site",
+    "inter_grader_ceiling",
     "split_hierarchy",
     "leave_one_site_out",
     "quality_examples",
@@ -342,6 +395,7 @@ def main() -> None:
     concordance()
     ab_replication()
     cross_dataset_site()
+    inter_grader_ceiling()
     split_hierarchy()
     leave_one_site_out()
     quality_examples()

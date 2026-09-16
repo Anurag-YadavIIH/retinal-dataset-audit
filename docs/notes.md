@@ -1832,3 +1832,105 @@ images differing in colour processing, filed under different patient
 IDs", not "the same photograph filed twice". Both datasets' thresholds
 were calibrated on ODIR-5K; the module docstring's "genuine duplicates
 measured ~0.00-0.01" describes its tightest pairs, not all of them.
+
+## Item 4: segmentation as a fourth strand -- raw numbers and provenance
+
+Filed as a strand, not a rung. Levels 1-3 are one argument about splits;
+this asks what the labels those levels are measured against are worth.
+WALKTHROUGH.md sections 13-17 carry the reasoning; this entry carries the
+numbers and says which are reproducible.
+
+**Artifact-sourced (regenerate yourself, but only with the data on disk
+at `D:/retinaprep_data/`, which is outside the repo by design):**
+
+- Inter-grader ceilings -- `artifacts/inter_grader.json`, from
+  `python notebooks/inter_grader.py`:
+  - DRIVE, n=20: Dice 0.7879 +/- 0.0206, 95% CI [0.7789, 0.7969];
+    IoU 0.6505. obs1 fg 8.758%, obs2 fg 8.434%.
+  - CHASE_DB1, n=28: Dice 0.7765 +/- 0.0250, 95% CI [0.7673, 0.7858];
+    IoU 0.6353. obs1 fg 6.934%, obs2 fg 6.638%.
+  - Structural checks on both: dims match on every pair, zero identical
+    observer pairs, zero empty masks.
+- Vessel model vs both observers --
+  `artifacts/drive_vessel/vessel_vs_ceiling.json`, from
+  `python notebooks/vessel_vs_ceiling.py`:
+  - model vs obs1 (its training target): 0.7884 +/- 0.0229
+  - model vs obs2 (never trained on):    0.8074 +/- 0.0258
+  - ceiling obs1 vs obs2:                0.7882 +/- 0.0208
+  - style gap (obs1 - obs2) = **-0.0190**, i.e. the sign is reversed from
+    the prediction section 15 made. 13/20 images "beat the ceiling",
+    which is noise at a 0.0002 mean gap.
+- Disagreement location --
+  `artifacts/drive_vessel/disagreement_location.json`, from
+  `python notebooks/disagreement_location.py`:
+  - concentration 0.4987, null 0.3199, **enrichment 1.567x**
+    95% CI [1.500, 1.634]
+  - **side-taking 0.4452** 95% CI [0.4280, 0.4624] -- excludes 0.5 in the
+    direction opposite to the style-fitting hypothesis
+  - mean contested pixels 9,508/image; mean model-vs-obs2 disagreements
+    8,488/image
+- U-Net baselines:
+  - `artifacts/idrid_od/unet_od_result.json` -- disc, 43/11/27 split,
+    test Dice 0.8581 +/- 0.1646, median 0.9110, min 0.3558, max 0.9741,
+    IoU 0.7795, best val 0.7780
+  - `artifacts/drive_vessel/unet_vessel_result.json` -- vessels, 16/4/20
+    split, test Dice 0.7884 +/- 0.0229, IoU 0.6513, best val 0.7968
+- Mask QC -- `artifacts/idrid_od/mask_quality_summary.json`: 81 masks,
+  0 rejected, 1 flagged (area outlier), fg fraction mean 1.781%.
+- Failure analysis -- `artifacts/idrid_od/failure_analysis.csv` and
+  `failure_analysis.json`, from `python notebooks/idrid_failure_analysis.py`;
+  `failures.png` renders the three. This one started as an ad-hoc pass and
+  was rewritten as a committed script *because* its numbers ended up quoted
+  in README.md and docs/summary.md, which puts them on the wrong side of
+  this document's own artifact-sourced/prose-sourced line unless anyone can
+  re-run them. "Failure" is `dice < 0.70`, a constant in the script chosen
+  from a real gap in the sorted distribution (0.36 / 0.42 / 0.55, then 0.73)
+  rather than a round number picked afterwards.
+
+**The exudate finding, and the story that had to be dropped.** The
+satisfying result would have been that the three disc failures are bad
+photographs the quality module would have caught upstream -- a clean link
+between the curation work and the segmentation work. The data refuses it:
+failures score **0.776** gradability against **0.708** for the other 24,
+and the module flags **0 of 3** at the configured 0.5 threshold. They are
+cleaner than average. What they share is disease: exudate fraction
+0.03983 against 0.00723 for the rest, a **5.51x** ratio, and IDRiD_66
+and IDRiD_55 are ranks **#1 and #2** of 27 by exudate burden. Per-image
+geometry, because the group means flatten real variety:
+
+| image | Dice | pred/true area | centroid err | components | exudate rank |
+|---|---|---|---|---|---|
+| IDRiD_62 | 0.356 | 4.62x | 25.2 px | 4 | **18** |
+| IDRiD_66 | 0.420 | 3.22x | 130.5 px | 5 | 1 |
+| IDRiD_55 | 0.554 | 0.46x | 31.3 px | 2 | 2 |
+| *other 24* | *0.902 med* | *1.00x* | *5.4 px* | *1 med* | *--* |
+
+Note what this does and does not close. IDRiD_66 fits the exudate story
+on both burden and geometry -- rank 1, and five bright blobs 3.2x too
+large. IDRiD_55 fits on burden (rank 2) but *under*-segments, so the
+geometry is not the same signature. IDRiD_62 has the multi-blob
+over-segmentation without the exudate burden (rank 18) and **is not
+explained**. Mann-Whitney p=0.0595 at n=3 vs 24 -- indicative, not
+significant; the rank-1-and-2 placement and the rendered predictions
+carry this, not the test.
+
+**Untested, and flagged as untested everywhere it appears.** If the
+conservative-objective explanation for the reversed style gap is right,
+retraining with a recall-weighted loss (Tversky, beta > alpha) should
+push predicted foreground above observer 1's 8.76% and flip side-taking
+above 0.5. One run on 16 images. Not done. If side-taking stays below
+0.5 under that loss, the explanation offered here is wrong.
+
+**Provenance caveat that travels with every DRIVE number.** The official
+Grand Challenge distribution withholds test annotations. The copy used
+here is a third-party Kaggle re-upload of what appears to be the
+pre-challenge distribution. Verified: dimensions match, masks binary and
+non-empty with plausible vessel fractions, the two observers differ on
+every image, and the test set's first-observer conventions are consistent
+with the official training set's. Not verified: chain of custody. The
+first pass on this concluded the second observer was unobtainable, from
+five sources; widening the search to 22 found four mirrors that have it.
+CHASE_DB1 carries no such caveat and gives the same ceiling, which is the
+reason two datasets were used rather than one.
+
+---

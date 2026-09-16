@@ -1413,59 +1413,226 @@ performance drops to around the inter-observer level, the model has
 learned observer 1's style. If it holds, it has learned vessels. That
 comparison requires only the second-observer masks, which — as §13
 documents — are the very thing the official distribution withholds. The
+**A concrete way to settle it**, cheaper than re-auditing the
+literature: score a model against observer 2 as well as observer 1. If
+performance drops to around the inter-observer level, the model has
+learned observer 1's style. If it holds, it has learned vessels. That
+comparison requires only the second-observer masks, which — as §13
+documents — are the very thing the official distribution withholds. The
 data needed to check the question is the data that is hardest to obtain,
 which may be part of why the question is not routinely asked.
 
-### The test was run, and it came out the other way
+That check was then run on a model trained for this project. §16 reports
+it, including the fact that the prediction above did not survive it.
 
-That paragraph was written before running it. It was then run on a U-Net
-trained on DRIVE's 20 training images and scored on DRIVE's 20 test
-images — the same images the ceiling was measured on, so the comparison
-is commensurable:
+---
+
+
+## 16. The commensurable test: one model, both observers
+
+§15 ends by proposing a check. This section is that check, run.
+
+The optic disc model could not be used for it — a disc is one convex
+blob where boundary disagreement is a small share of area, so disc Dice
+normally runs 0.90+, while vessels are almost entirely boundary. Putting
+a disc score beside a vessel ceiling would be a category error. So a
+U-Net was trained on DRIVE's 20 training images and evaluated on DRIVE's
+20 test images — the same images §14's ceiling was measured on, which is
+what makes the comparison commensurable rather than indicative.
 
 | | Dice | 95% CI |
 |---|---|---|
 | model vs **observer 1** (its training target) | 0.7884 ± 0.0229 | [0.7784, 0.7985] |
-| model vs **observer 2** (regraded, never trained on) | **0.8074** ± 0.0258 | [0.7961, 0.8187] |
+| model vs **observer 2** (never trained on) | **0.8074** ± 0.0258 | [0.7961, 0.8187] |
 | observer 1 vs observer 2 (the ceiling) | 0.7882 ± 0.0208 | [0.7791, 0.7973] |
 
-**The predicted style-fitting signature did not appear, and the sign is
-reversed.** The model agrees *more* with the observer it never saw
-(0.8074) than with the one it was trained on (0.7884). The style gap is
-−0.0190, not the positive value the hypothesis called for.
+### The prediction failed, and it is kept here rather than quietly fixed
 
-Two readings, and the second looks likelier:
+§15 predicted that a model graded against observer 1 would fit that
+annotator's conventions, and would therefore score *better* against
+observer 1 than against observer 2. **The sign is reversed.** The model
+agrees more with the observer it never saw. The style gap is −0.0190
+where the hypothesis required a positive value.
 
-- **The model reached inter-observer agreement and stopped.** Its
-  agreement with observer 1 (0.7884) is statistically indistinguishable
-  from observer 2's agreement with observer 1 (0.7882). On this
-  evidence, the model is exactly as close to the reference standard as
-  another qualified human is — no closer, and no further.
-- **It converged on something more central than either annotator.**
-  Foreground area is the clue: observer 1 marks 8.76% of the frame,
-  observer 2 marks 8.44%, and the model marks 8.53% — between them, and
-  within 1% of observer 2 despite never seeing observer 2's masks. A
-  model fitted with a Dice+BCE objective tends toward confident,
-  slightly conservative regions, and that pulled it away from observer
-  1's more liberal marking rather than toward it.
+What the numbers do support is narrower and more interesting: the
+model's agreement with observer 1 (0.7884) is statistically
+indistinguishable from observer 2's agreement with observer 1 (0.7882).
+**It reached inter-observer agreement and stopped** — exactly as close to
+the reference standard as another qualified human, no closer and no
+further.
 
-**What this does and does not establish.** It establishes that the test
-is cheap, that it runs, and that for *this* model observer-1
-style-fitting is not the explanation for anything. It does not answer
-the question for the published 0.80–0.82 results, because this model is
-not one of them: a plain full-image U-Net at 512×512 reaching 0.7884 is
-below that band, and a model pushed to 0.82 may well have started fitting
-idiosyncrasies that one at 0.79 has not. The honest summary is that the
-first model to be put through this check showed no style-fitting, which
-is a point in favour of the benign reading and an argument for running
-the check more often, not a resolution.
+One trap recorded because it looked like a result: the model "beat the
+ceiling" on 13 of 20 images. That sounds striking and means almost
+nothing, since the two means differ by 0.0002 — which of them is higher
+on any given image is close to a coin flip. A per-image win rate can
+sound like evidence while the underlying distributions are identical.
 
-One incidental finding worth recording: the model beat the ceiling on
-13 of 20 images. That looks striking and means very little — its mean
-agreement with observer 1 and observer 2's mean agreement with observer
-1 differ by 0.0002, so which of the two is higher on any given image is
-close to a coin flip. It is a good example of a per-image win-rate
-sounding like evidence when the underlying means are identical.
+### Where the disagreements sit
+
+Aggregate Dice cannot distinguish three quite different situations, so
+the disagreement *sets* were compared directly rather than their sizes.
+D_human = XOR(obs1, obs2), the pixels the humans dispute.
+D_model = XOR(model, obs2), where the model departs from observer 2.
+
+**The null matters and is stated explicitly.** Disagreements can only
+occur where at least one annotator marked something, so the containing
+region is U = obs1 ∪ obs2 ∪ model. If D_model were scattered at random
+within U, the expected share landing inside D_human is |D_human| / |U|.
+Observed over expected is an enrichment factor, where 1.0 means no
+better than chance.
+
+| | |
+|---|---|
+| observed concentration | 0.4987 |
+| null expectation | 0.3199 |
+| **enrichment** | **1.57x**, 95% CI [1.50, 1.63] |
+| side-taking (fraction backing observer 1) | **0.4452**, 95% CI [0.4280, 0.4624] |
+
+All three candidate explanations get a partial answer, and none wins
+outright:
+
+1. **It learned the easy consensus — partly true.** Errors are enriched
+   1.57x in already-contested territory. The model left contested pixels
+   contested.
+2. **It makes its own distinct mistakes — also partly true.** Only half
+   its errors are in contested territory; the other half sit elsewhere.
+3. **It takes observer 1's side — refuted, and on the wrong side of
+   chance.** Within contested pixels the model backs observer 1 only
+   44.5% of the time, a confidence interval that excludes 0.5 in the
+   direction opposite to the hypothesis. It backs observer 2 — the
+   annotator it never trained on — 55.5% of the time.
+
+An implementation note worth stating because it saves a measurement:
+side-taking follows from binarity. Where obs1 ≠ obs2 (contested) and
+model ≠ obs2, then model = obs1 necessarily. So
+|D_model ∩ D_human| / |D_human| *is* the fraction siding with observer 1;
+it does not need to be computed separately.
+
+### The mechanism, and a prediction that would falsify it
+
+Foreground area explains the direction the style-fitting hypothesis got
+wrong:
+
+| annotator | mean foreground area |
+|---|---|
+| observer 1 (training target) | 8.76% |
+| **model** | **8.53%** |
+| observer 2 | 8.44% |
+
+The model landed *between* the two humans and within 1% of observer 2,
+without ever seeing observer 2's masks. Observer 1 is the more liberal
+annotator — marking faint capillaries further down the vessel tree —
+and a Dice+BCE objective rewards confident, well-supported foreground.
+That pulls the model toward conservative predictions and therefore
+*away* from its own training annotator, which is precisely the observed
+effect.
+
+**This makes a testable prediction, stated before anyone runs it.** If
+the conservatism is the objective's doing rather than something about
+observer 2, then re-training with a recall-weighted loss — Tversky with
+β > α, or weighted BCE favouring false positives over false negatives —
+should push predicted foreground area above 8.76% and **flip side-taking
+above 0.5**, because a liberal model would start backing the liberal
+annotator. If side-taking stays below 0.5 under a recall-weighted loss,
+the explanation offered here is wrong and something else is producing
+the alignment with observer 2.
+
+Not run, and deliberately flagged as untested rather than implied. It is
+cheap — one retraining run on 16 images — and it is the obvious next
+experiment for anyone continuing this work.
+
+---
+
+## 17. Three failures, and the curation story that wasn't true
+
+The optic disc model reports Dice 0.8581 ± 0.1646 on IDRiD's 27 test
+images. The mean is the wrong summary and the median (0.9110) is the
+right one: **three images fail badly, two of them below 0.50 Dice.**
+Three images out of 27 move the headline by 0.05, which is exactly the
+underpowered regime declared before the run.
+
+A 7% silent-failure rate matters more for a screening tool than a mean
+does, so the three were investigated rather than averaged away.
+
+### The convenient story, and why it is false
+
+The satisfying result would have been that these are bad photographs and
+that this project's own quality module would have rejected them upstream
+— a clean connection between the curation work and the segmentation
+work. The data refuses it:
+
+| | failures (n=3) | rest (n=24) |
+|---|---|---|
+| gradability score | **0.776** | 0.708 |
+| flagged at the configured 0.5 threshold | **0 of 3** | 0 of 24 |
+
+**The failures are cleaner than average.** The quality module flags none
+of them, and would not have caught a single one. This is a model
+limitation, not a curation gap, and it is reported as one.
+
+### What actually goes wrong
+
+Group means are the wrong summary at n=3 — they average away the fact
+that the three fail in two different ways — so the three are listed
+individually, with the other 24 as a reference row:
+
+| image | Dice | pred/true area | centroid err | components | exudate rank |
+|---|---|---|---|---|---|
+| IDRiD_62 | 0.356 | 4.62x | 25.2 px | 4 | **18** |
+| IDRiD_66 | 0.420 | 3.22x | 130.5 px | 5 | **1** |
+| IDRiD_55 | 0.554 | 0.46x | 31.3 px | 2 | **2** |
+| *other 24* | *0.902 median* | *1.00x* | *5.4 px* | *1 median* | |
+
+Two over-segment into four and five disconnected blobs; the third
+collapses to under half the true disc area. All three put the disc centre
+somewhere it is not. Rendered alongside their images, the cause is
+visible in two of them: the model is latching onto **hard exudates** —
+bright yellow-white lesions that look very much like an optic disc — in
+a dataset whose entire purpose is diabetic retinopathy.
+
+The exudate masks IDRiD ships allow this to be checked rather than
+eyeballed, and the check is a strong one: exudate fraction 0.0398 across
+the failures against 0.0072 for the rest, a **5.51x** ratio, and **the
+most and second-most exudate-heavy images in the entire test set are both
+failures**.
+
+What the table makes visible, and a group mean would have hidden, is that
+the fit is not uniform. IDRiD_66 matches the mechanism on both counts —
+rank 1 for exudate, and five bright blobs 3.2x too large. IDRiD_55
+matches on burden (rank 2) but *under*-segments, which is the opposite
+geometric signature. So "exudate confusion" is carried by the burden
+association for one of them and by burden plus geometry for the other,
+and that distinction is worth keeping rather than smoothing into a single
+2.77x mean.
+
+### The clinical implication, stated plainly
+
+Disc localisation degrades as exudate burden rises. **The failure mode
+gets worse exactly on the sickest eyes** — the ones a screening tool
+exists to find. That is backwards, and an ophthalmologist would
+recognise it immediately: a disc segmenter that quietly breaks on florid
+exudative retinopathy is unreliable precisely where reliability matters,
+and its aggregate Dice will not show it, because sick eyes are a
+minority of any test set.
+
+It also has a concrete consequence for anything built downstream. Disc
+segmentation is usually a *preprocessing* step — for cup-to-disc ratio,
+for vessel-origin registration, for centring crops. A step that fails
+silently on the most diseased images propagates that failure into
+everything after it, and the symptom will appear somewhere else entirely.
+
+### What is not explained
+
+Two of three, not three of three. **IDRiD_62 ranks 18th of 27 by exudate
+burden** and fails anyway, with a displaced and oversized prediction on a
+relatively clean image. The exudate mechanism does not account for it and
+no alternative is offered here.
+
+The statistics deserve the same restraint: Mann-Whitney on exudate
+burden between the two groups gives p=0.0595 at n=3 versus 24. That is
+indicative and not significant, and the visual evidence plus the
+rank-1-and-2 placement is doing more work than the test is. With three
+failures, no stronger claim is available.
 
 ---
 

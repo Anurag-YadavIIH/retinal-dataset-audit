@@ -50,6 +50,13 @@ than in a footnote:
   quadratically). The finding shows contamination **exists**; it does
   not show that any specific published result was affected.
 
+Running alongside all three levels rather than after them, **a fourth
+strand asks what the labels those levels are measured against are
+actually worth.** On two independent dual-graded datasets, qualified
+human graders agree only ~78% (Dice) on where a retinal vessel is, and a
+U-Net trained on one observer lands exactly at that agreement and stops —
+see [the fourth strand](#the-fourth-strand-what-the-ground-truth-is-worth).
+
 The model here is deliberately boring. The data path is the contribution.
 
 **Live reports:** [combined QC & findings report](https://anurag-yadaviih.github.io/retinal-dataset-audit/qc_report.html)
@@ -747,6 +754,136 @@ second adapter makes visible — not a crack in the manifest contract.
 
 ---
 
+## The fourth strand: what the ground truth is worth
+
+Levels 1-3 are one argument, about splits. Every result in them is
+measured **against labels**. This strand is not a fourth rung on that
+ladder — it runs alongside all three and asks the question they all
+assume away: what are those labels worth?
+
+Segmentation is the one place in ophthalmic imaging where that question
+has a clean answer, because a few datasets ship the **same images graded
+twice, independently, by different people**. Two of them do:
+
+| dataset | structure | n | observer 1 vs observer 2 (Dice) |
+|---|---|---|---|
+| DRIVE | vessels | 20 | 0.7879 ± 0.0206, 95% CI [0.7789, 0.7969] |
+| CHASE_DB1 | vessels | 28 | 0.7765 ± 0.0250, 95% CI [0.7673, 0.7858] |
+
+Two datasets, two countries, two annotation teams, and the same answer:
+**qualified graders agree about 78% on where a retinal vessel is.** That
+is a ceiling, and it reframes every vessel number in the literature. A
+model reported at Dice 0.80 is not 20 points short of perfect; it is
+already at the limit of what the reference standard can resolve.
+
+### A model that reaches the ceiling and stops
+
+A U-Net was trained on DRIVE's 20 training images, on observer 1's masks
+only, and scored on DRIVE's 20 test images against **both** observers —
+the same 20 images the ceiling was measured on, which is what makes the
+comparison commensurable rather than merely suggestive. (The optic disc
+model could not be used for this: a disc is one convex blob where
+boundary disagreement is a small share of area, so disc Dice normally
+runs 0.90+, and putting that beside a vessel ceiling would be a category
+error.)
+
+![The model reaches human-vs-human agreement, and stops](docs/figures/inter_grader_ceiling.png)
+
+The model's agreement with its own training annotator (0.7884) is
+indistinguishable from the second human's agreement with that same
+annotator (0.7882) — 0.0002 apart. It is exactly as close to the
+reference standard as another qualified grader, no closer and no further.
+
+**A prediction made before the run failed, and is kept here rather than
+quietly dropped.** A model graded against observer 1 should, on the
+style-fitting hypothesis, fit that annotator's conventions and score
+*better* against observer 1 than against observer 2. The sign is
+reversed: it agrees **more** with the annotator it never saw (0.8074 vs
+0.7884).
+
+Asking *where* it disagrees rather than how much refuted the hypothesis a
+second time. Within the pixels the two humans actually dispute, the model
+backs its own training annotator only **44.5%** of the time (95% CI
+[0.428, 0.462] — excluding 0.5 on the opposite side from the prediction).
+Its errors *are* enriched 1.57x in contested territory, so it did learn
+the easy consensus and leave the hard pixels hard; it just does not take
+its trainer's side there. Foreground area explains the direction:
+observer 1 is the more liberal annotator at 8.76% of pixels, the model
+sits at 8.53%, observer 2 at 8.44%. A Dice+BCE objective rewards
+confident, well-supported foreground, which pulls the model toward
+conservatism and therefore *away* from its own annotator. WALKTHROUGH.md
+§16 states the one retraining run that would falsify that explanation,
+and flags it as not yet done.
+
+One trap recorded because it briefly looked like a result: the model
+"beat the ceiling" on 13 of 20 images. That means almost nothing when the
+two means are 0.0002 apart — a per-image win rate can sound like evidence
+while the distributions behind it are identical.
+
+### Where it breaks: the sickest eyes
+
+An optic disc U-Net on IDRiD reports Dice 0.8581 ± 0.1646 across 27 test
+images. The mean is the wrong summary — the median is 0.9110, and
+**three images fail badly**, two of them below 0.50.
+
+The convenient story would be that those three are bad photographs that
+this project's own quality module would have rejected upstream: a clean
+link between the curation work and the segmentation work. It is false,
+and is reported as false. The failures score **0.776** on gradability
+against 0.708 for the other 24, and the quality module flags **0 of 3**.
+They are cleaner than average. This is a model limitation, not a curation
+gap.
+
+What actually goes wrong is visible once the predictions are rendered.
+Two of the three over-segment — 4.6x and 3.2x too large, scattered across
+four and five disconnected blobs — and the third collapses to 0.46x. All
+three land the disc centre 25-130px away from it, against 5px for the
+other 24. The model is latching onto **hard exudates**: bright
+yellow-white lesions that look very much like an optic disc, in a dataset
+whose entire purpose is diabetic retinopathy. IDRiD ships exudate masks,
+so this is checkable rather than eyeballed. The three failures carry
+**5.5x** the mean hard-exudate burden of the other 24 images, and the
+**most and second-most exudate-heavy images in the whole test set are
+both failures**.
+
+**Disc localisation degrades as exudate burden rises. The failure mode
+gets worse on exactly the eyes a screening tool exists to find**, which
+is backwards. Aggregate Dice will not show it, because sick eyes are a
+minority of any test set. And disc segmentation is normally a
+*preprocessing* step — for cup-to-disc ratio, for vessel-origin
+registration, for centring crops — so a step that fails silently on the
+most diseased images propagates that failure into everything after it,
+where the symptom will surface somewhere else entirely.
+
+The third failure is **not explained**. IDRiD_62 ranks 18th of 27 by
+exudate burden and fails anyway, on a relatively clean image. Mann-Whitney
+on exudate burden between the groups gives p=0.0595 at n=3 versus 24 —
+indicative, not significant, with the visual evidence and the rank-1-and-2
+placement doing more work than the test is. With three failures, no
+stronger claim is available.
+
+**Where this strand is weaker**, held to the same standard as the three
+levels above:
+
+- **n is small: 20, 27 and 28 images.** That was declared before the runs
+  rather than discovered after. It is what the public dual-graded datasets
+  come in, and nothing here rests on a significance test that a larger n
+  would rescue.
+- **DRIVE's provenance is not fully verifiable.** The official Grand
+  Challenge distribution withholds its test annotations, so the second
+  observer had to come from a third-party re-upload. Its structure was
+  checked — dimensions match, masks binary and non-empty with plausible
+  vessel fractions, the two observers differ on every single image, and
+  the test set's first-observer conventions are consistent with the
+  official training set's — but the chain of custody was not. CHASE_DB1
+  carries no such caveat and yields the same ceiling, which is precisely
+  why two datasets were used instead of one.
+- The ceiling transfers to **these** datasets and **this** structure. It
+  is not a universal 0.78, and the disc numbers are not comparable to the
+  vessel ones.
+
+---
+
 ## Why patient-level splitting matters in ophthalmology specifically
 
 Two reasons that do not apply as strongly in other imaging domains:
@@ -772,8 +909,12 @@ quality  -> gradability score, reject list
 dedupe   -> perceptual hash + embedding near-duplicates
 split    -> image_random (wrong) vs patient_group (right)
 train    -> ResNet18 binary normal/abnormal
-experiment -> arms A/B/C/D, matched sizes
+experiment -> arms A/B/C/D/E, matched sizes
 report   -> self-contained HTML QC report
+
+mask_quality -> mask/image alignment, empty, area-outlier, component checks
+segment      -> U-Net optic disc + vessel baselines, scored against the
+                inter-grader ceiling (separate track, segmentation manifests)
 ```
 
 ---
@@ -942,11 +1083,18 @@ pytest
 
 Deliberately not built yet. Listed so the scope is honest rather than padded.
 
-- [ ] U-Net optic disc segmentation baseline (IDRiD, 81 images) — in progress
-- [ ] Mask and annotation QC: alignment, empty masks, area outliers, connected components
-- [ ] Inter-grader agreement (Dice, IoU) — **on CHASE_DB1's two observers**, not
-      DRIVE's: DRIVE's official distribution withholds its test annotations and
-      every curated mirror checked lacks them (WALKTHROUGH.md §13)
+- [x] U-Net optic disc segmentation baseline (IDRiD, 81 images) — done, see
+      "The fourth strand" above; the interesting part is the three failures
+- [x] Mask and annotation QC: alignment, empty masks, area outliers, connected
+      components — done, validated by injecting each defect into synthetic masks
+- [x] Inter-grader agreement (Dice, IoU) on **two** dual-graded datasets —
+      done. Scoped originally to CHASE_DB1 alone because DRIVE's official
+      distribution withholds its test annotations; widening the search found
+      mirrors that carry the second observer, so DRIVE is included with an
+      explicit provenance caveat (WALKTHROUGH.md §13)
+- [ ] Recall-weighted (Tversky, β>α) retraining on DRIVE — the one cheap run
+      that would falsify the conservative-objective explanation for why the
+      model sides with the observer it never trained on (WALKTHROUGH.md §16)
 - [ ] **REFUGE held-out-device experiment — the direct segmentation parallel to
       arm E.** REFUGE splits by *device* on purpose: training is 400 Zeiss
       Visucam 500 images at 2124×2056, validation and test are 800 Canon CR-2

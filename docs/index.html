@@ -67,6 +67,59 @@ a { color: #2C4870; }
   README and WALKTHROUGH.md.
 </p>
 
+<h2 style="margin-top:2.2rem;border-bottom:1px solid #eee;padding-bottom:0.4rem;font-size:1.25rem">
+  A fourth strand: what the labels themselves are worth
+</h2>
+<p>
+  The three levels above are one argument, about splits, and every result
+  in them is measured <strong>against labels</strong>. A fourth strand
+  runs alongside all three rather than after them, and asks what those
+  labels are worth. Segmentation is where that question has a clean
+  answer, because a few datasets ship the same images graded twice by
+  different people.
+</p>
+<table>
+  <tr><th>Finding</th><th>Measurement</th></tr>
+  <tr><td>Two qualified graders agree only <strong>~78%</strong> on where
+      a retinal vessel is</td>
+      <td>DRIVE (n=20): Dice 0.7879 &plusmn; 0.0206<br>
+          CHASE_DB1 (n=28): Dice 0.7765 &plusmn; 0.0250<br>
+          <em>two countries, two annotation teams, same answer</em></td></tr>
+  <tr><td>A U-Net trained on one observer <strong>reaches that ceiling
+      and stops</strong></td>
+      <td>model vs its own trainer: 0.7884<br>
+          second human vs that trainer: 0.7882<br>
+          <em>0.0002 apart &mdash; as close as another qualified grader,
+          no closer</em></td></tr>
+  <tr><td>Optic disc segmentation <strong>fails on the sickest
+      eyes</strong></td>
+      <td>3 of 27 IDRiD test images fail (2 below 0.50 Dice)<br>
+          failures carry <strong>5.5&times;</strong> the hard-exudate
+          burden of the rest; ranked #1 and #2 in the test set<br>
+          <em>the quality module flags 0 of 3 &mdash; they are cleaner
+          than average</em></td></tr>
+</table>
+<p>
+  The last row is the one with a clinical consequence.
+  <strong>Disc localisation degrades as exudate burden rises</strong>,
+  so it is least reliable on exactly the eyes a screening programme
+  exists to find, and an aggregate Dice will not show it because florid
+  eyes are a minority of any test set. Disc outlining is normally a
+  preprocessing step &mdash; cup-to-disc ratio, centring, registration
+  &mdash; so the failure propagates into whatever is computed next.
+</p>
+<p class="note">
+  Stated up front here too: n is 20, 27 and 28 images, which is how large
+  the public dual-graded datasets are, and that was declared before the
+  runs rather than after. DRIVE's second observer comes from a
+  third-party re-upload whose structure was verified but whose chain of
+  custody was not &mdash; CHASE_DB1 carries no such caveat and gives the
+  same ceiling, which is why two datasets were used. One prediction made
+  in advance failed: the model agrees <em>more</em> with the observer it
+  never trained on, and that reversal is reported rather than dropped.
+  One of the three disc failures remains unexplained.
+</p>
+
 <a class="card" href="qc_report.html">
   <h2>Combined QC &amp; findings report &rarr;</h2>
   <p>Start here. Headline result, dataset overview, all nine leakage-audit
@@ -95,8 +148,10 @@ a { color: #2C4870; }
   <h2>One-page clinical summary &rarr;</h2>
   <p>For a reader deciding whether to trust a reported accuracy number,
   not the engineering team — what the three-level leakage finding means for
-  deploying a model at a new site, in plain language — now covering both
-  datasets.</p>
+  deploying a model at a new site, across both datasets, plus the
+  segmentation strand: why a disc model breaks on florid exudative
+  retinopathy, and why a 78% human-vs-human ceiling changes how a
+  published segmentation score should be read.</p>
 </a>
 
 <p class="note">
@@ -109,7 +164,13 @@ a { color: #2C4870; }
   check) come from <code>notebooks/domain_shift_audit.py</code>,
   <code>notebooks/arm_e_robustness_checks.py</code>, and
   <code>notebooks/site4_followup.py</code> — full numbers in the
-  repository's <code>docs/notes.md</code>.
+  repository's <code>docs/notes.md</code>. The segmentation strand comes
+  from <code>notebooks/inter_grader.py</code>,
+  <code>notebooks/vessel_vs_ceiling.py</code> and
+  <code>notebooks/disagreement_location.py</code> over the
+  <code>retinaprep.segment</code> and <code>retinaprep.mask_quality</code>
+  modules; it runs on IDRiD, DRIVE and CHASE_DB1 rather than on the two
+  classification datasets above.
 </p>
 
 <footer>
